@@ -8,23 +8,33 @@ nada que mude com o deploy.
     python manage.py build_admin_boundaries
     python manage.py build_admin_boundaries --check   # só verifica deriva
 
-Duas decisões, ambas deliberadas:
+Três decisões, todas deliberadas:
 
-- **Simplificação a 223 m.** A versão original tem 6,7 MB e 149 mil vértices
-  para 158 municípios. Arredondar coordenadas não chega, porque não remove
-  vértices colineares; a Douglas-Peucker remove. A 223 m a divisão continua
-  legível e o ficheiro desce para cerca de meio megabyte. É um contorno de
-  referência, não um registo cadastral.
+- **Simplificação, e não em igual nas duas camadas.** A versão original tem
+  6,7 MB e 149 mil vértices para 158 municípios. Arredondar coordenadas não
+  chega, porque não remove vértices colineares; a Douglas-Peucker remove. Nos
+  municípios vai a 223 m e o ficheiro desce para cerca de meio megabyte. Nas
+  províncias vai a 1,1 km, porque uma província tem 200 km de lado e 1,1 km de
+  desvio não se vê. São contornos de referência, não registos cadastrais.
 - **Municípios à parte das províncias.** A lista dos municípios é cinco vezes
-  maior que a das províncias. Vai num pedido separado, feito só quando o
-  utilizador se aproxima ou desenha um círculo, para a primeira pintura do mapa
-  não pagar o que ainda não está a ver.
+  maior que a das províncias. Vai num pedido separado, feito quando o mapa
+  atinge `ZOOM_MUNICIPIOS` ou quando o utilizador desenha um círculo, para uma
+  vista de país não pagar por 157 municípios que não se leem a essa escala.
+- **Coordenadas em `[lon, lat]`, com uma excepção que é regra.** O
+  `geometry.coordinates` sai em ordem GeoJSON, que é o que o `L.geoJSON` lê ao
+  desenhar. O `properties.ponto` sai ao contrário, em `[lat, lon]`, porque é o
+  `L.circleMarker` que o recebe. O comando raciocina em `[lat, lon]` do
+  principio ao fim, e a troca acontece em `geometria()`; desfaz-se em
+  `aneis_de()`. Trocar um dos dois não dá erro nenhum: o mapa desenha Angola
+  no Atlântico a oeste, ou escreve os nomes no mar, e o DOM continua cheio de
+  `path`.
 
 O `ADM2` do geoBoundaries não diz a que província pertence cada município, por
 isso a atribuição é espacial: o centro de cada município é testado contra os
-contornos provinciais. Um município que caia em zero ou duas províncias faz o
-comando falhar. Um ficheiro com um município na província errada é pior do que
-não ter o ficheiro.
+contornos provinciais, a 5,5 m, bem mais fino do que a simplificação, porque aí
+um erro põe o município na província errada. Um município que caia em zero ou
+duas províncias faz o comando falhar. Um ficheiro com um município na província
+errada é pior do que não ter o ficheiro.
 """
 
 from __future__ import annotations
@@ -41,7 +51,12 @@ import requests
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-from apps.properties.reference import ANGOLA_PROVINCES, MUNICIPALITIES_BY_PROVINCE
+from apps.core.management.utils import exige_desenvolvimento
+from apps.properties.reference import (
+    MUNICIPALITIES_BY_PROVINCE,
+    PROVINCE_BOUNDARY_CODES,
+    provinces_without_boundary,
+)
 
 # Commit fixo: o geoBoundaries republica e renomeia ficheiros, e um URL solto
 # mudava o conteúdo sem ninguém se aperceber.
@@ -64,13 +79,16 @@ TOLERANCIA_PROVINCIAS = 0.01
 # um erro põe o município no sítio errado, e um píxel de fronteira decide.
 TOLERANCIA_TESTE = 0.0005
 
-# O geoBoundaries escreve `Cuito` no sítio onde o município se chama Kuito: um C
-# por um K. É um erro de digitação na fonte, não uma variante, e por isso não
-# pode sair de uma comparação automática. Vive aqui porque é um facto sobre a
-# fonte, não sobre Angola: `reference.py` descreve o país e não quem o mapeia.
-CORRECOES_FONTE: Final[dict[str, str]] = {"Cuito": "Kuito"}
-
-CORRECOES_FONTE: Final[dict[str, str]] = {"Cuito": "Kuito"}
+# Factos sobre a fonte, não sobre Angola. `Cuito` é um erro de digitação do
+# geoBoundaries no sítio onde o município se chama Kuito, um C por um K, e por
+# isso não pode sair de uma comparação automática. `Amboim (Gabela)` é o mesmo
+# município escrito de duas maneiras: a fonte desambigua com o nome da cidade
+# e a lista do projecto tem só `Amboim`. Ambos vivem aqui porque `reference.py`
+# descreve o país e esta tabela descreve quem o mapeia.
+CORRECOES_FONTE: Final[dict[str, str]] = {
+    "Cuito": "Kuito",
+    "Amboim (Gabela)": "Amboim",
+}
 
 DESTINO = Path(settings.BASE_DIR) / "static" / "vendor" / "geo"
 FICHEIRO_PROVINCIAS = DESTINO / "angola-provincias.json"
@@ -159,7 +177,7 @@ def aneis(geometria: dict[str, Any]) -> list[list[list[float]]]:
 
 
 def limites(geometria: dict[str, Any], tolerancia: float) -> list[list[list[float]]]:
-    """Simplifica e converte para `[lat, lon]`, a ordem que o Leaflet quer."""
+    """Simplifica e converte para a ordem interna `[lat, lon]`."""
     partes: list[list[list[float]]] = []
     for anel in aneis(geometria):
         original = [tuple(p) for p in anel]
@@ -169,6 +187,11 @@ def limites(geometria: dict[str, Any], tolerancia: float) -> list[list[list[floa
             # divisão. Um anel mais pequeno que a tolerância encolhe para dois
             # pontos e desaparece do mapa, e um município que desapareceu é pior
             # do que um município desenhado com os vértices que a fonte deu.
+            #
+            # Daqui resulta uma contagem de vértices que não desce com a
+            # tolerância: ao subir, mais anéis caem abaixo de quatro pontos e
+            # voltam ao original. É o preço da garantia, e vale mais do que uns
+            # kilobytes.
             simplificado = original
         pontos: list[list[float]] = []
         anterior: tuple[float, float] | None = None
@@ -265,13 +288,34 @@ def geometria(contornos: list[list[list[float]]]) -> dict[str, Any]:
     diferença não é de estilo: `L.geoJSON` só aceita `FeatureCollection`, e um
     ficheiro com uma chave à escolha não é desenhado por nada, nem pelo Leaflet
     nem por outra ferramenta.
+
+    As coordenadas saem em `[lon, lat]`, que é a ordem do formato e a que o
+    Leaflet lê ao desenhar. Dentro do comando o costume é o contrário: `[lat,
+    lon]`, porque é a ordem de `centro()` e de `dentro()` e a que
+    `L.circleMarker` recebe. A troca acontece aqui, na fronteira. Sem ela o mapa
+    desenhava Angola no oceano a oeste, e o browser não dizia nada: o `lat`
+    lia-se como longitude e a longitude como latitude.
     """
-    return {"type": "MultiPolygon", "coordinates": [[anel] for anel in contornos]}
+    return {
+        "type": "MultiPolygon",
+        "coordinates": [
+            [[[ponto[1], ponto[0]] for ponto in anel]] for anel in contornos
+        ],
+    }
 
 
 def aneis_de(geojson: dict[str, Any]) -> list[list[list[float]]]:
-    """Os anéis exteriores de uma geometria, para o teste de pertença."""
-    return [anel for poligono in geojson["geometry"]["coordinates"] for anel in poligono]
+    """Os anéis exteriores de uma feature, na ordem interna `[lat, lon]`.
+
+    O ficheiro está em `[lon, lat]`. Os testes de pertença daqui para fora
+    trabalham em `[lat, lon]`, e esta função é a fronteira entre os dois: recebe
+    a geometria como o browser a lê e devolve-a como o comando a raciocina.
+    """
+    return [
+        [[ponto[1], ponto[0]] for ponto in anel]
+        for poligono in geojson["geometry"]["coordinates"]
+        for anel in poligono
+    ]
 
 
 def feature_divisao(
@@ -337,12 +381,23 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         if options["check"]:
+            # Verificar é seguro em qualquer lado: só lê a fonte e os ficheiros
+            # versionados, e é assim que se confirma a deriva num build.
             self.verifica_deriva()
             return
+        exige_desenvolvimento(debug=settings.DEBUG, comando="build_admin_boundaries")
         self.escreve()
 
     def provincias(self) -> list[dict[str, Any]]:
-        """As 18 províncias, com o código igual ao de `ANGOLA_PROVINCES`."""
+        """As divisões da fonte, com o código que o projecto lhes dá.
+
+        A lista do projecto tem vinte e uma entradas e a fonte tem dezoito
+        divisões, e as duas não podem ser igualadas: `Cuando` e `Cubango` são uma
+        divisão só na fonte, e `Icolo e Bengo` e `Moxico Leste` não têm contorno.
+        Cada divisão da fonte é desenhada uma vez, sob o primeiro código que
+        aponta para ela; as províncias sem contorno são contadas no relatório,
+        não desenhadas a invenção.
+        """
         saida = []
         for feature, codigo in self.pares_provincia():
             nome = feature["properties"]["shapeName"]
@@ -354,36 +409,40 @@ class Command(BaseCommand):
                     {"codigo": codigo, "nome": nome, "ponto": centro(partes)}, partes
                 )
             )
-        if len(saida) != len(ANGOLA_PROVINCES):
-            raise CommandError(
-                f"A fonte tem {len(saida)} províncias e a lista local tem "
-                f"{len(ANGOLA_PROVINCES)}."
+
+        sem_contorno = provinces_without_boundary()
+        if sem_contorno:
+            self.stdout.write(
+                f"  {len(saida)} divisões desenhadas; {len(sem_contorno)} províncias "
+                f"sem contorno na fonte: {', '.join(sem_contorno)}."
             )
         return saida
 
     def pares_provincia(self) -> list[tuple[dict[str, Any], str]]:
-        """Cada província da fonte, com o código que o projecto lhe dá.
+        """Cada divisão da fonte, com o código que o projecto lhe dá.
 
-        A correspondência é por nome normalizado, e uma província que não case
-        faz o comando falhar. As de Angola diferem só em acentos — `Bié`, `Huíla`
-        e `Uíge` — e uma correspondência que falhasse deixaria a camada com
-        nomes que o resto da aplicação não reconhece.
+        A correspondência é a de `PROVINCE_BOUNDARY_CODES`, que é escrita à mão
+        porque não é dedutível: quando a fonte fundir ou separar uma província,
+        a tabela é que fica a dizer qual das duas coisas é. Uma divisão da fonte
+        que nenhum código aponte continua a ser erro — se a fonte ganhou uma
+        divisão, alguém tem de decidir de que província se trata, e adivinhar
+        aqui seria pior.
         """
-        codigos = {sem_acentos(nome): codigo for codigo, nome in ANGOLA_PROVINCES}
-        if len(codigos) != len(ANGOLA_PROVINCES):
-            raise CommandError("Há nomes de província que colidem depois de sem acentos.")
+        por_nome: dict[str, list[str]] = {}
+        for codigo, nome in PROVINCE_BOUNDARY_CODES.items():
+            por_nome.setdefault(sem_acentos(nome), []).append(codigo)
 
         pares = []
         for feature in descarrega("ADM1")["features"]:
             nome = feature["properties"]["shapeName"]
-            codigo = codigos.get(sem_acentos(nome))
-            if codigo is None:
+            codigos = por_nome.get(sem_acentos(nome))
+            if not codigos:
                 raise CommandError(
-                    f"A fonte traz a província {nome!r}, que não existe em "
-                    f"ANGOLA_PROVINCES. Ou a fonte mudou, ou a lista local está "
-                    f"errada; adivinhar a correspondência aqui seria pior."
+                    f"A fonte traz a divisão {nome!r}, que nenhum código de "
+                    f"PROVINCE_BOUNDARY_CODES aponta. Ou a fonte mudou, ou a "
+                    f"tabela está errada; adivinhar a correspondência aqui seria pior."
                 )
-            pares.append((feature, codigo))
+            pares.append((feature, sorted(codigos)[0]))
         return pares
 
     def municipios(self) -> list[dict[str, Any]]:

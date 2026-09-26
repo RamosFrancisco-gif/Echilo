@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -18,6 +19,7 @@ from django.urls import reverse
 
 from apps.core.geo import haversine_metres
 from apps.core.testing import (
+    ids_dentro_de,
     jpeg_bytes,
     make_image,
     make_owner,
@@ -39,7 +41,13 @@ from apps.properties.management.commands.build_admin_boundaries import (
     variantes,
 )
 from apps.properties.models import Property, PropertyStatusEvent
-from apps.properties.reference import ANGOLA_PROVINCES
+from apps.properties.reference import (
+    ALL_MUNICIPALITIES,
+    ANGOLA_PROVINCES,
+    MUNICIPALITIES_BY_PROVINCE,
+    municipalities_for,
+    provinces_without_boundary,
+)
 from apps.properties.selectors import PropertyFilters, PropertyQueryService
 from apps.properties.services import build_map_payload
 
@@ -365,7 +373,9 @@ class CuratorActionTests(TestCase):
         make_verified_documents(self.prop)
         self.client.force_login(self.curator)
 
-        self.client.post(self.transition_url, {"to_status": Property.Status.PUBLISHED, "reason": "  "})
+        self.client.post(
+            self.transition_url, {"to_status": Property.Status.PUBLISHED, "reason": "  "}
+        )
 
         self.prop.refresh_from_db()
         self.assertEqual(self.prop.status, Property.Status.UNDER_VALIDATION)
@@ -492,6 +502,49 @@ class CuratorActionTests(TestCase):
         self.assertEqual(self.prop.images.count(), 30)
 
 
+class AngolaReferenceTests(SimpleTestCase):
+    """As listas fechadas que os formulários oferecem.
+
+    São dados de referência, não regras: o que não se pode é a lista mudar de
+    baixo dos pés de quem a escreveu, ou uma província ficar de fora sem que
+    alguém se aperceba.
+    """
+
+    def test_a_lista_tem_vinte_e_uma_provincias(self) -> None:
+        self.assertEqual(len(ANGOLA_PROVINCES), 21)
+
+    def test_toda_provincia_tem_a_sua_lista_de_municipios(self) -> None:
+        """Uma província sem lista é uma província em que o campo não oferece nada."""
+        sem_lista = [
+            rotulo
+            for codigo, rotulo in ANGOLA_PROVINCES
+            if not municipalities_for(codigo)
+        ]
+        self.assertEqual(sem_lista, [])
+
+    def test_nenhuma_lista_repete_municipio(self) -> None:
+        for codigo, lista in MUNICIPALITIES_BY_PROVINCE.items():
+            with self.subTest(provincia=codigo):
+                self.assertEqual(len(lista), len(set(lista)))
+
+    def test_a_provincia_vazia_traz_a_uniao_sem_repetir(self) -> None:
+        """«Todas as províncias» oferece tudo, e `Calai` está em duas listas.
+
+        Sem o `set`, o formulário de «Todas as províncias» ofereceria Calai duas
+        vezes, uma por cada província onde ele está.
+        """
+        self.assertIn("Calai", ALL_MUNICIPALITIES)
+        self.assertEqual(
+            ALL_MUNICIPALITIES,
+            tuple(sorted({m for lista in MUNICIPALITIES_BY_PROVINCE.values() for m in lista})),
+        )
+
+    def test_as_duas_provincias_sem_contorno_sao_declaradas(self) -> None:
+        self.assertEqual(
+            provinces_without_boundary(), ("Icolo e Bengo", "Moxico Leste")
+        )
+
+
 class PropertySearchTests(TestCase):
     """A pesquisa pública e a ferramenta da IA partilham os mesmos filtros."""
 
@@ -536,8 +589,14 @@ class PropertySearchTests(TestCase):
         """`chip_query` só mexe no filtro indicado."""
         filters = PropertyFilters(province="LUANDA", municipality="Kilamba")
 
-        self.assertEqual(filters.chip_query(purpose="RENT", type=""), "province=LUANDA&municipality=Kilamba&purpose=RENT")
-        self.assertEqual(filters.chip_query(purpose="", type="LAND"), "province=LUANDA&municipality=Kilamba&type=LAND")
+        self.assertEqual(
+            filters.chip_query(purpose="RENT", type=""),
+            "province=LUANDA&municipality=Kilamba&purpose=RENT",
+        )
+        self.assertEqual(
+            filters.chip_query(purpose="", type="LAND"),
+            "province=LUANDA&municipality=Kilamba&type=LAND",
+        )
         self.assertEqual(PropertyFilters().chip_query(purpose="", type=""), "")
 
     def test_unpublished_property_is_never_returned(self) -> None:
@@ -779,6 +838,205 @@ class PropertyAreaQueryStringTests(TestCase):
         self.assertEqual(filters.province, "LUANDA")
 
 
+class ProvinceScopedMunicipalityTests(TestCase):
+    """As sugestões de município seguem a província escolhida.
+
+    O campo aceita texto livre e as sugestões são o que o formulário oferece; se
+    as duas coisas divergirem, quem escreve "Viana" com Benguela escolhida
+    recebe uma lista onde Viana não está, e não descobre se errou ou se o
+    sistema está partido.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.benguela = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            province_ref="BENGUELA",
+            municipality="Catumbela",
+        )
+        self.viana = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            province_ref="LUANDA",
+            municipality="Viana",
+        )
+        self.client.force_login(self.curator)
+
+    def test_o_campo_da_equipa_tem_o_datalist_que_o_input_aponta(self) -> None:
+        """O `list` do campo aponta para um `id` que existe na mesma página.
+
+        Antes não apontava para nada, e nada denunciava: o campo continuava a
+        aceitar texto, a equipa escrevia o município à mão, e o sintoma era uma
+        lista de opções em falta que ninguém conseguia nomear. Um atributo que
+        aponta para o vazio não dá erro, e o campo parece funcionar — só não
+        sugere.
+        """
+        for url in (
+            reverse("properties:curator_create"),
+            reverse("properties:curator_detail", args=[self.benguela.reference]),
+        ):
+            with self.subTest(pagina=url):
+                html = self.client.get(url).content.decode()
+                campo = re.search(r'<input[^>]*\bname="municipality"[^>]*>', html)
+                self.assertIsNotNone(campo, "o formulário da equipa não tem o campo município")
+                alvo = re.search(r'\blist="([^"]+)"', campo.group(0))
+                self.assertIsNotNone(alvo, "o campo município não aponta para nenhuma lista")
+                self.assertIn(
+                    f'<datalist id="{alvo.group(1)}"',
+                    html,
+                    f'o `list` aponta para {alvo.group(1)!r} e esse id não está na página',
+                )
+
+    def test_o_datalist_da_equipa_traz_a_lista_da_provincia_do_imovel(self) -> None:
+        """As sugestões são as da província que o imóvel já tem, não as de todas."""
+        html = self.client.get(
+            reverse("properties:curator_detail", args=[self.benguela.reference])
+        ).content.decode()
+
+        bloco = re.search(
+            r'<datalist id="municipality-options">(.*?)</datalist>', html, re.DOTALL
+        )
+        opcoes = re.findall(r'value="([^"]*)"', bloco.group(1))
+        self.assertIn("Catumbela", opcoes)
+        self.assertNotIn("Cazombo", opcoes)
+
+    def test_o_botao_de_centrar_vive_sobre_o_mapa(self) -> None:
+        """O botão tem de estar dentro do contentor do mapa, não no painel ao lado.
+
+        A diferença entre "centrar no mapa" e "centrar ao lado do mapa" é só de
+        onde a coisa está escrita, e o teste é o que diz qual das duas foi
+        feita. `leaflet.draw` continua em cima à esquerda, e este em cima à
+        direita.
+        """
+        html = self._html_da_pagina({})
+
+        self.assertIn("area-centrar", ids_dentro_de(html, "area-map"))
+
+    def test_o_botao_de_centrar_e_um_botao_com_nome(self) -> None:
+        """`type="button"`, nome visível, e nome acessível que diz o que faz.
+
+        Um `Centrar` sem nome acessível não diz a ninguém se é o centro do mapa ou
+        o centro de quem o vê, e um `div` com um clique não chega ao teclado.
+        """
+        html = self._html_da_pagina({})
+
+        botao = re.search(r'<button[^>]*\bid="area-centrar"[^>]*>.*?</button>', html, re.DOTALL)
+        self.assertIsNotNone(botao, "o botão de centrar não está no HTML")
+        marca = botao.group(0)
+        self.assertIn('type="button"', marca)
+        nome = re.sub(r"<[^>]+>", "", marca).strip()
+        self.assertTrue(nome, "o botão de centrar não tem nome visível")
+        rotulo = re.search(r'aria-label="([^"]+)"', marca)
+        self.assertIsNotNone(rotulo, "o botão de centrar não tem nome acessível")
+        self.assertIn(nome, rotulo.group(1))
+
+    def test_a_mensagem_da_localizacao_e_um_status_e_nao_um_alerta(self) -> None:
+        """A caixa dos tiles já é um `alert`; dois alertas leem a mensagem errada."""
+        html = self._html_da_pagina({})
+
+        caixa = re.search(r'<p[^>]*\bid="area-local"[^>]*>', html)
+        self.assertIsNotNone(caixa, "falta a caixa que fala da localização")
+        self.assertIn('role="status"', caixa.group(0))
+        self.assertNotIn('role="alert"', caixa.group(0))
+
+    def test_a_sugestao_de_luanda_nao_inclui_catumbela(self) -> None:
+        response = self.client.get(reverse("properties:property_list"), {"province": "LUANDA"})
+        sugestoes = response.context["municipality_suggestions"]
+        self.assertIn("Viana", sugestoes)
+        self.assertNotIn("Catumbela", sugestoes)
+
+    def test_a_sugestao_de_benguela_nao_inclui_viana(self) -> None:
+        response = self.client.get(reverse("properties:property_list"), {"province": "BENGUELA"})
+        sugestoes = response.context["municipality_suggestions"]
+        self.assertIn("Catumbela", sugestoes)
+        self.assertNotIn("Viana", sugestoes)
+
+    def test_a_sugestao_traz_a_lista_da_provincia_mesmo_sem_imoveis(self) -> None:
+        """"Moxico Leste" não tem nenhum imóvel, e as sugestões não ficam vazias.
+
+        Uma lista que só sai dos imóveis publicados oferece zero para quem está
+        a filter por uma província ainda sem catálogo, e o campo parece partido.
+        """
+        response = self.client.get(
+            reverse("properties:property_list"), {"province": "MOXICO_LESTE"}
+        )
+        sugestoes = response.context["municipality_suggestions"]
+        self.assertIn("Cazombo", sugestoes)
+        self.assertNotIn("Viana", sugestoes)
+
+    def test_sem_provincia_as_sugestoes_trazem_todos_os_municipios(self) -> None:
+        response = self.client.get(reverse("properties:property_list"))
+        sugestoes = response.context["municipality_suggestions"]
+        self.assertIn("Viana", sugestoes)
+        self.assertIn("Cazombo", sugestoes)
+        self.assertIn("Catumbela", sugestoes)
+
+    def test_o_HTML_mostra_a_sugestao_da_provincia_escolhida(self) -> None:
+        """O que aparece sem JavaScript é o que o servidor escreveu."""
+        html = self._html_da_pagina({"province": "LUANDA"})
+        self.assertIn('value="Talatona"', html)
+        self.assertNotIn('value="Catumbela"', html)
+
+    def test_a_pagina_nao_escreve_as_outras_provincias_no_datalist(self) -> None:
+        """O `<datalist>` que a página entrega tem só a província escolhida.
+
+        A página não leva os cento e setenta e um nomes no HTML à espera de
+        alguém escrever: escrevê-los todos seria oferecer todos, que é o
+        contrário do que o filtro promete.
+        """
+        html = self._html_da_pagina({"province": "BENGUELA"})
+        sugestoes = self._datalist(html)
+        self.assertIn("Catumbela", sugestoes)
+        self.assertNotIn("Talatona", sugestoes)
+        self.assertNotIn("Cazombo", sugestoes)
+
+    @staticmethod
+    def _datalist(html: str) -> list[str]:
+        """As opções do `<datalist>` que o HTML carrega, e nada mais.
+
+        Medir a página inteira é medir o que não é a lista: o `placeholder` do
+        campo, o cartão de um imóvel e o texto de ajuda são todos coisas que
+        podem escrever um nome de município sem que a lista o contenha.
+        """
+        bloco = re.search(
+            r'<datalist id="municipios-disponiveis">(.*?)</datalist>', html, re.DOTALL
+        )
+        if bloco is None:
+            return []
+        return re.findall(r'value="([^"]*)"', bloco.group(1))
+
+    def _html_da_pagina(self, parametros: dict[str, str]) -> str:
+        response = self.client.get(reverse("properties:property_list"), parametros)
+        return response.content.decode()
+
+    def test_o_endpoint_devolve_a_lista_da_provincia(self) -> None:
+        """O JavaScript troca as opções por aqui, e o que ele recebe é o mesmo
+        que o `<datalist>` da página tinha."""
+        response = self.client.get(reverse("properties:municipalities"), {"province": "BENGUELA"})
+
+        self.assertEqual(response.status_code, 200)
+        sugestoes = response.json()["sugestoes"]
+        self.assertIn("Catumbela", sugestoes)
+        self.assertNotIn("Talatona", sugestoes)
+
+    def test_o_endpoint_sem_provincia_devolve_todos(self) -> None:
+        response = self.client.get(reverse("properties:municipalities"))
+        sugestoes = response.json()["sugestoes"]
+        self.assertIn("Talatona", sugestoes)
+        self.assertIn("Cazombo", sugestoes)
+
+    def test_o_endpoint_da_a_mesma_lista_que_a_pagina(self) -> None:
+        """Duas listas parecidas divergem na segunda mudança de província."""
+        pagina = self.client.get(reverse("properties:property_list"), {"province": "LUANDA"})
+        endpoint = self.client.get(reverse("properties:municipalities"), {"province": "LUANDA"})
+        self.assertEqual(
+            pagina.context["municipality_suggestions"], endpoint.json()["sugestoes"]
+        )
+
+
 class PropertyAreaViewTests(TestCase):
     """O catálogo tem de responder com e sem JavaScript, e sem focar a área no mapa."""
 
@@ -910,7 +1168,10 @@ class PropertyAreaMarkupTests(TestCase):
         self.assertContains(response, 'id="area-draw"')
         self.assertContains(response, "Desenhar círculo")
         # E o botão é um `<button>` de verdade: tem de apanhar Tab e Enter.
-        self.assertContains(response, '<button class="btn btn--sm btn--primary" type="button" id="area-draw">')
+        self.assertContains(
+            response,
+            '<button class="btn btn--sm btn--primary" type="button" id="area-draw">',
+        )
 
     def test_map_explains_what_the_dots_are(self) -> None:
         """Duas cores sem legenda são duas cores a adivinhar."""
@@ -1342,6 +1603,13 @@ class AdminBoundaryDataTests(SimpleTestCase):
     def _le(caminho: Path) -> dict:
         return json.loads(caminho.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def _aneis_gravados(divisao: dict) -> list[list[list[float]]]:
+        """Os anéis tal como estão no ficheiro, em `[lon, lat]`."""
+        return [
+            anel for poligono in divisao["geometry"]["coordinates"] for anel in poligono
+        ]
+
     def test_os_ficheiros_sao_feature_collections_de_geojson(self) -> None:
         """O formato decide se o mapa desenha alguma coisa.
 
@@ -1358,9 +1626,69 @@ class AdminBoundaryDataTests(SimpleTestCase):
                     self.assertEqual(feature["geometry"]["type"], "MultiPolygon")
                     self.assertIn("nome", feature["properties"])
 
-    def test_as_dezoito_provincias_sao_as_do_projecto(self) -> None:
+    def test_as_coordenadas_sao_lista_de_poligonos(self) -> None:
+        """`MultiPolygon` é polígonos, cada um com os seus anéis.
+
+        Uma lista plana de anéis é a forma que parece certa e não é: o Leaflet
+        lê o primeiro elemento como um anel de pontos e recebe números onde
+        esperava coordenadas, e o mapa fica sem Divisions sem dar erro. A
+        simplificação e a troca de eixos acontecem no mesmo passo, e um anel
+        perdido aqui dentro é um município que desaparece.
+        """
+        for caminho in (FICHEIRO_PROVINCIAS, FICHEIRO_MUNICIPIOS):
+            for divisao in self._le(caminho)["features"]:
+                with self.subTest(divisao=divisao["properties"]["nome"]):
+                    self.assertGreaterEqual(len(divisao["geometry"]["coordinates"]), 1)
+                    for poligono in divisao["geometry"]["coordinates"]:
+                        self.assertGreaterEqual(len(poligono), 1)
+                        for anel in poligono:
+                            self.assertGreaterEqual(len(anel), 4)
+                            for ponto in anel:
+                                self.assertIsInstance(ponto[0], (int, float))
+                                self.assertIsInstance(ponto[1], (int, float))
+
+    def test_toda_divisao_desenhada_e_uma_provincia_do_projecto(self) -> None:
+        """O mapa não desenha nenhuma divisão que os filtros não ofereçam.
+
+        Um código no ficheiro que não esteja na lista seria um nome que o
+        cliente nunca vê e que o `divisoesDe` não sabe traduzir.
+        """
         codigos = {p["properties"]["codigo"] for p in self.provincias}
-        self.assertEqual(codigos, {codigo for codigo, _ in ANGOLA_PROVINCES})
+        do_projecto = {codigo for codigo, _ in ANGOLA_PROVINCES}
+        self.assertEqual(codigos - do_projecto, set())
+
+    def test_as_provincias_sem_contorno_sao_as_que_a_fonte_nao_conhece(self) -> None:
+        """Nem toda a lista do projecto é desenhada, e a diferença é declarada.
+
+        A lista tem vinte e uma entradas e a fonte dezoito divisões. A
+        divergência é um facto, não um erro, e escrevê-la num sítio só é o que
+        impede o número de aparecer em código.
+        """
+        desenhados = {p["properties"]["codigo"] for p in self.provincias}
+        self.assertEqual(
+            set(provinces_without_boundary()),
+            {"Icolo e Bengo", "Moxico Leste"},
+        )
+        self.assertNotIn("ICOLO_E_BENGO", desenhados)
+        self.assertNotIn("MOXICO_LESTE", desenhados)
+
+    def test_quando_e_cubango_partilham_um_contorno_so(self) -> None:
+        """Duas entradas da lista, uma divisão desenhada, e o nome que a fonte dá.
+
+        A fonte conhece "Cuando Cubango" como uma divisão. Desenhá-la duas vezes
+        era duplicar geometria e dar ao mapa duas linhas sobrepostas; deixá-la de
+        fora punia quem filtra por qualquer das duas. Fica uma, com o nome da
+        fonte, que é o que o mapa diz e o que a fonte sustenta.
+        """
+        desenhados = {p["properties"]["codigo"] for p in self.provincias}
+        self.assertIn("CUANDO", desenhados)
+        self.assertNotIn("CUBANGO", desenhados)
+        nomes = {
+            p["properties"]["nome"]
+            for p in self.provincias
+            if p["properties"]["codigo"] == "CUANDO"
+        }
+        self.assertEqual(nomes, {"Cuando Cubango"})
 
     def test_cada_municipio_pertenece_a_uma_provincia_conhecida(self) -> None:
         codigos = {p["properties"]["codigo"] for p in self.provincias}
@@ -1374,16 +1702,64 @@ class AdminBoundaryDataTests(SimpleTestCase):
             with self.subTest(provincia=provincia["properties"]["codigo"]):
                 self.assertIn(provincia["properties"]["codigo"], com_municipios)
 
+    def test_a_geometria_gravada_esta_na_ordem_do_geojson(self) -> None:
+        """`[lon, lat]` no ficheiro, como a RFC 7946 manda e o `L.geoJSON` lê.
+
+        O comando raciocina em `[lat, lon]`, que é a ordem de `centro()`, de
+        `dentro()` e a que `L.circleMarker` recebe. Se essa ordem chegar ao
+        ficheiro, o Leaflet lê a latitude como longitude e a longitude como
+        latitude: os contornos aparecem no Atlântico, a oeste de Angola, e o
+        browser não dá erro nenhum. A bbox é a mesma generosa de propósito: o
+        objectivo é apanhar uma divisão projectada para o lado errado do globo.
+        """
+        for divisao in (*self.provincias, *self.municipios):
+            for anel in self._aneis_gravados(divisao):
+                for lon, lat in anel:
+                    with self.subTest(divisao=divisao["properties"]["nome"]):
+                        self.assertTrue(11.0 <= lon <= 24.5, f"lon {lon}")
+                        self.assertTrue(-19.0 <= lat <= -4.0, f"lat {lat}")
+
     def test_tudo_o_que_o_mapa_desenha_fica_dentro_de_angola(self) -> None:
-        # A bbox é generosa de propósito: o objectivo é apanhar uma divisão
-        # projectada para o lado errado do globo, que o browser desenhava no
-        # oceano sem dizer nada.
+        """Os contornos que o comando calculou, já na ordem em que ele pensa."""
         for divisao in (*self.provincias, *self.municipios):
             for anel in aneis_de(divisao):
                 for lat, lon in anel:
                     with self.subTest(divisao=divisao["properties"]["nome"]):
                         self.assertTrue(-19.0 <= lat <= -4.0, f"lat {lat}")
                         self.assertTrue(11.0 <= lon <= 24.5, f"lon {lon}")
+
+    def test_cada_provincia_esta_onde_o_seu_ponto_diz(self) -> None:
+        """O ponto do rótulo cai na sua província, e em mais nenhuma.
+
+        É o teste que apanha os eixos trocados. Com `[lat, lon]` no ficheiro o
+        `L.geoJSON` desenhava cada província no Atlântico, e o ponto do rótulo —
+        esse sim na ordem certa — ficava a salvo no mar: nenhuma província
+        continha o seu próprio ponto. Um ficheiro desenhado no sítio errado e um
+        ficheiro com a forma certa davam o mesmo número de paths no DOM.
+        """
+        for provincia in self.provincias:
+            ponto = provincia["properties"]["ponto"]
+            onde = [
+                p["properties"]["nome"]
+                for p in self.provincias
+                if dentro(ponto, aneis_de(p))
+            ]
+            with self.subTest(provincia=provincia["properties"]["nome"]):
+                self.assertEqual(onde, [provincia["properties"]["nome"]])
+
+    def test_o_ponto_do_rotulo_continua_na_ordem_do_leaflet(self) -> None:
+        """`ponto` é propriedade nossa, não geometria GeoJSON.
+
+        Vai directo para `L.circleMarker`, que quer `[lat, lon]`. Um ficheiro bem
+        formado não tem de ser uniforme por dentro: com `ponto` em ordem GeoJSON
+        os nomes iam para o oceano enquanto os contornos apareciam no sítio
+        certo, e nenhum dos dois erros se denunciava.
+        """
+        for divisao in (*self.provincias, *self.municipios):
+            lat, lon = divisao["properties"]["ponto"]
+            with self.subTest(divisao=divisao["properties"]["nome"]):
+                self.assertTrue(-19.0 <= lat <= -4.0, f"lat {lat}")
+                self.assertTrue(11.0 <= lon <= 24.5, f"lon {lon}")
 
     def test_todo_o_contorno_fecha_uma_area(self) -> None:
         for divisao in (*self.provincias, *self.municipios):
@@ -1395,8 +1771,11 @@ class AdminBoundaryDataTests(SimpleTestCase):
     def test_o_ponto_do_rotulo_cae_dentro_do_proprio_contorno(self) -> None:
         # O rótulo escreve-se sozinho, sem o utilizador pedir. Se o ponto cair
         # fora da divisão, o nome aparece no sítio ao lado e passa a ser errado.
-        for divisao in self.municipios:
-            with self.subTest(municipio=divisao["properties"]["nome"]):
+        # Vale para as duas camadas: as províncias também escrevem o nome, e com
+        # um contorno provincial recortado como o de Luanda a média dos vértices
+        # cai no mar.
+        for divisao in (*self.provincias, *self.municipios):
+            with self.subTest(divisao=divisao["properties"]["nome"]):
                 self.assertTrue(dentro(divisao["properties"]["ponto"], aneis_de(divisao)))
 
     def test_a_licenca_da_fonte_via_no_ficheiro(self) -> None:
@@ -1419,15 +1798,20 @@ class AdminBoundaryDataTests(SimpleTestCase):
     def test_o_mapa_escreve_o_nome_que_os_filtros_usam(self) -> None:
         """A fonte e o projecto discordam da ortografia; o projecto manda.
 
-        `Kuito`, `Baía Farta`, `Nharea` e `Gabela` chegam da fonte como `Cuito`,
+        `Kuito`, `Baía Farta`, `Nharea` e `Amboim` chegam da fonte como `Cuito`,
         `Baia Farta`, `N'harea` e `Amboim (Gabela)`. Um rótulo com o nome da
         fonte ao lado de um filtro com o nome do projecto obriga o utilizador a
         saber que são a mesma coisa.
         """
         nomes = {m["properties"]["nome"] for m in self.municipios}
-        for esperado in ("Kuito", "Baía Farta", "Nharea", "Gabela", "Xá-Muteba"):
+        for esperado in ("Kuito", "Baía Farta", "Nharea", "Amboim", "Xá-Muteba"):
             with self.subTest(municipio=esperado):
                 self.assertIn(esperado, nomes)
+
+    def test_o_mapa_nao_escreve_o_nome_que_a_fonte_da(self) -> None:
+        """`Amboim (Gabela)` é o mesmo município, escrito de outra maneira."""
+        nomes = {m["properties"]["nome"] for m in self.municipios}
+        self.assertNotIn("Amboim (Gabela)", nomes)
 
     def test_nenhum_roteiro_da_fonte_atinge_o_mapa(self) -> None:
         for divisao in (*self.provincias, *self.municipios):

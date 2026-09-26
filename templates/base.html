@@ -16,7 +16,7 @@
 
   {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body{% block body_attrs %}{% endblock %}>
   <a class="skip-link" href="#conteudo">Saltar para o conteúdo</a>
 
   {% include "partials/icons.html" %}

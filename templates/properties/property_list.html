@@ -20,6 +20,8 @@
   <script src="{% static 'vendor/leaflet-draw/1.0.4/leaflet.draw.js' %}" defer></script>
 {% endblock %}
 
+{% block body_attrs %} data-municipality-options="{{ municipality_options_url }}"{% endblock %}
+
 {% block scripts %}
   {{ map_config|json_script:"area-map-config" }}
 {% endblock %}
@@ -62,7 +64,20 @@
       {{ map_payload|json_script:"area-map-markers" }}
 
       <div class="area-search__body">
-        <div class="area-search__map" id="area-map" role="region" aria-label="Mapa de Angola com os imóveis publicados e a área de pesquisa"></div>
+        <div class="area-search__map" id="area-map" role="region" aria-label="Mapa de Angola com os imóveis publicados e a área de pesquisa">
+          {% comment %}
+            Fica dentro do contentor do mapa, e não no painel ao lado, para que
+            quem está a olhar para o mapa tenha o botão debaixo dos olhos. O
+            Leaflet acrescenta as suas camadas sem limpar o que já lá está.
+
+            O nome visível é curto, e o nome acessível é a frase inteira: um
+            "Centrar" sozinho diz pouco, e um ícone de 30×30 sem legenda foi
+            lido como mapa partido.
+          {% endcomment %}
+          <button class="area-search__centrar" type="button" id="area-centrar"
+                  aria-label="Centrar o mapa na minha localização"
+                  title="Centrar o mapa na minha localização">Centrar</button>
+        </div>
 
         <div class="area-search__panel">
           {% comment %}
@@ -97,6 +112,16 @@
             vez de deixar o utilizador adivinhar.
           {% endcomment %}
           <p class="area-search__error" id="area-error" role="alert" hidden></p>
+
+          {% comment %}
+            A falha da geolocalização não é a falha dos tiles, e a cura é outra.
+            Uma caixa só para as duas faria com que um 403 do fornecedor
+            apagasse a recusa da permissão, e vice-versa: o utilizador ficava a
+            seguir a pista errada. Esta é `status` e não `alert` porque não é uma
+            urgência, e porque a caixa dos tiles já é um `alert` — dois alertas
+            ao mesmo tempo fazem o leitor de ecrã ler a mensagem errada.
+          {% endcomment %}
+          <p class="area-search__local" id="area-local" role="status"></p>
 
           <div class="area-search__buttons">
             {% comment %}
@@ -170,9 +195,16 @@
 
           <div class="field">
             <label class="label" for="f-municipio">Município ou localidade</label>
+            {% comment %}
+              As sugestões são os municípios da província escolhida. A lista vem do
+              servidor, e por isso quem abre a página sem JavaScript vê as mesmas
+              sugestões do que quem espera pelo pedido. Continua a ser texto livre
+              com sugestões, e não uma lista fechada, porque o campo também aceita
+              localidade e um `<select>` aqui fechava a pesquisa a município.
+            {% endcomment %}
             <input class="field-control" type="text" name="municipality" id="f-municipio" list="municipios-disponiveis" value="{{ filters.municipality|default:'' }}" placeholder="Talatona">
             <datalist id="municipios-disponiveis">
-              {% for area in available_municipalities %}<option value="{{ area }}"></option>{% endfor %}
+              {% for area in municipality_suggestions %}<option value="{{ area }}"></option>{% endfor %}
             </datalist>
           </div>
 

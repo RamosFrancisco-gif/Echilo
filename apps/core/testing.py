@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
+from html.parser import HTMLParser
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -99,6 +101,67 @@ def make_property(
     prop.full_clean()
     prop.save()
     return prop
+
+
+class _IdsInside(HTMLParser):
+    """Apanha os `id` que estão dentro de um certo contentor.
+
+    Um `<div>` com filhos não se extrai com `re`: o primeiro `</div>` fecha um
+    filho e o resto do contentor fica do lado de fora. A pergunta "o botão está
+    sobre o mapa ou no painel ao lado" é de estrutura, e a estrutura é o que o
+    parser sabe ler.
+    """
+
+    def __init__(self, container_id: str) -> None:
+        super().__init__()
+        self.alvo = container_id
+        self.profundidade = 0
+        self.ids: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        atributos = dict(attrs)
+        identificador = atributos.get("id")
+        if identificador == self.alvo:
+            self.profundidade = 1
+            return
+        if self.profundidade:
+            self.profundidade += 1
+            if identificador:
+                self.ids.append(identificador)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.profundidade:
+            self.profundidade -= 1
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        atributos = dict(attrs)
+        if self.profundidade and atributos.get("id"):
+            self.ids.append(atributos["id"])
+
+
+def ids_dentro_de(html: str, container_id: str) -> list[str]:
+    """Os `id` que estão dentro do elemento com este `id`, por ordem de leitura."""
+    parser = _IdsInside(container_id)
+    parser.feed(html)
+    return parser.ids
+
+
+def select_options(html: str, field_id: str) -> list[str]:
+    """Os valores que um `<select>` oferece, e nada mais.
+
+    Medir a página inteira mede o que não é o campo: o formulário de registo tem
+    três `<select>` e o do tipo de documento escreve `BI` e `PASSPORT`, que não
+    são províncias. Ir pelo `id` do campo é o que impede um teste de passar por
+    coincidência enquanto mede outra coisa.
+    """
+    bloco = re.search(
+        rf'<select[^>]*\bid="{re.escape(field_id)}"[^>]*>(.*?)</select>', html, re.DOTALL
+    )
+    if bloco is None:
+        return []
+    return re.findall(r'value="([^"]*)"', bloco.group(1))
 
 
 def jpeg_bytes(colour: tuple[int, int, int] = (40, 32, 22)) -> bytes:

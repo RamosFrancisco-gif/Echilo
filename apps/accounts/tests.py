@@ -13,8 +13,9 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.core.testing import make_user
+from apps.core.testing import make_user, select_options
 from apps.core.validators import normalize_nif
+from apps.properties.reference import ANGOLA_PROVINCES
 
 User = get_user_model()
 
@@ -66,6 +67,18 @@ class RegistrationTests(RateLimitFreeTestCase):
         self.assertFalse(user.is_staff)
         self.assertTrue(user.check_password(PASSWORD))
         self.assertEqual(int(self.client.session["_auth_user_id"]), user.pk)
+
+    def test_o_registo_oferece_as_vinte_e_uma_provincias(self) -> None:
+        """Quem se regista escolhe de entre as 21, e não de entre as que têm imóveis.
+
+        O campo herda as escolhas de `User.province`, e essa herança é o que
+        mantém a lista igual à do catálogo. Um registo que oferecer um terço do
+        país obriga quem vive em Moxico Leste a escrever a província à mão.
+        """
+        response = self.client.get(self.url)
+
+        opcoes = select_options(response.content.decode(), "id_province")
+        self.assertEqual(opcoes, [""] + [codigo for codigo, _ in ANGOLA_PROVINCES])
 
     def test_registration_persists_the_declared_identity(self) -> None:
         """A identidade declarada no formulário fica na conta, normalizada."""

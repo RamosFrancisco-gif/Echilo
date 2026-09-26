@@ -48,9 +48,11 @@ from apps.core.testing import (
     make_property,
     make_user,
     make_verified_documents,
+    select_options,
 )
 
 from apps.properties.models import Property
+from apps.properties.reference import ANGOLA_PROVINCES
 
 
 class RouteSmokeTests(TestCase):
@@ -97,6 +99,23 @@ class RouteSmokeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "T3 no Kilamba com quintal")
 
+    def test_a_home_oferece_as_vinte_e_uma_provincias(self) -> None:
+        """A home e o catálogo são a mesma pesquisa, e oferecem o mesmo.
+
+        A home listava só as províncias com imóveis publicados, e quem entrava
+        pela porta da frente via uma lista mais curta do que a de quem chegava
+        pelo catálogo. Uma província que o produto não menciona é uma província
+        que não existe para quem lê; uma província sem imóveis dá um resultado
+        vazio, que é honesto.
+        """
+        response = self.anonymous.get(reverse("properties:home"))
+
+        opcoes = select_options(response.content.decode(), "search-province")
+        self.assertEqual(
+            opcoes, [""] + [codigo for codigo, _ in ANGOLA_PROVINCES]
+        )
+
+
     def test_property_list_htmx_returns_only_the_results(self) -> None:
         """O pedido HTMX devolve apenas o fragmento da listagem."""
         response = self.anonymous.get(reverse("properties:property_list"), HTTP_HX_REQUEST="true")
@@ -112,7 +131,7 @@ class RouteSmokeTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Kilamba", count=0)
+        self.assertContains(response, "T3 no Kilamba com quintal", count=0)
 
     def test_property_list_filters_by_type(self) -> None:
         """O filtro de tipologia é operável, não um controlo morto."""
@@ -121,7 +140,7 @@ class RouteSmokeTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Kilamba", count=0)
+        self.assertContains(response, "T3 no Kilamba com quintal", count=0)
         self.assertContains(response, "Moradia com piscina em Talatona", count=0)
 
     def test_type_filter_is_submitted_by_the_form(self) -> None:
@@ -459,6 +478,76 @@ class TemplateMarkupTests(SimpleTestCase):
                 used.update(value.split())
         missing = sorted(used - defined)
         self.assertEqual(missing, [], f"classes sem estilo: {missing}")
+
+    def test_every_css_variable_used_is_defined(self) -> None:
+        """Uma `var(--x)` por resolver não dá erro: a declaração é inválida e o
+        valor cai no inicial.
+
+        No mapa, `var(--success)` no ponto verde da legenda desenhava um círculo
+        transparente ao lado de pinos verdes no mapa. Duas cores sem legenda são
+        duas cores a adivinhar, e uma legenda com o ponto invisível é a mesma
+        coisa com mais trabalho.
+        """
+        tokens = (Path(settings.BASE_DIR) / "static" / "css" / "echilo.css").read_text(
+            encoding="utf-8"
+        )
+        definidas = set(re.findall(r"(--[a-z0-9-]+)\s*:", tokens))
+        por_resolver: dict[str, str] = {}
+        for nome in ("echilo.css", "pages.css"):
+            texto = (Path(settings.BASE_DIR) / "static" / "css" / nome).read_text(
+                encoding="utf-8"
+            )
+            # Os comentários saem antes da procura, com as linhas em cima: o
+            # comentário que explica a variável por resolver mencionava-a.
+            texto = re.sub(
+                r"/\*.*?\*/",
+                lambda m: "\n" * m.group(0).count("\n"),
+                texto,
+                flags=re.DOTALL,
+            )
+            for linha, conteudo in enumerate(texto.splitlines(), 1):
+                for variavel in re.findall(r"var\((--[a-z0-9-]+)\)", conteudo):
+                    por_resolver.setdefault(variavel, f"{nome}:{linha}")
+
+        self.assertEqual(
+            {v: o for v, o in por_resolver.items() if v not in definidas},
+            {},
+            "variáveis por resolver: "
+            f"{ {v: o for v, o in por_resolver.items() if v not in definidas} }",
+        )
+
+    def test_o_ouvinte_do_circulo_nao_recebe_o_evento_como_raio(self) -> None:
+        """`map.on(tipo, fn)` passa o evento a `fn`, e um evento não é um raio.
+
+        Registar a função de redesenho directamente no `EDITED` do `leaflet.draw`
+        fazia o evento do Leaflet parar a `clampRadius` como se fosse um número.
+        `Number(evento)` dá `NaN`, `clampRadius` devolve o mínimo, e arrastar um
+        círculo encolhia-o para 100 m sem erro nenhum: o mapa acceptava o
+        comando e desenhava outra coisa.
+
+        Não dá para apanhar isto no browser em cada alteração, e o teste de
+       markup também não o apanha — é um valor, não um elemento.
+        """
+        js = (Path(settings.BASE_DIR) / "static" / "js" / "echilo.js").read_text(
+            encoding="utf-8"
+        )
+
+        # A comparação é feita linha a linha para a falha mostrar a linha culpada
+        # e não o ficheiro inteiro: um `assertNotIn` com o texto de dentro
+        # despeja as quarenta kilobytes do JavaScript na consola.
+        registos = [
+            linha.strip()
+            for linha in js.splitlines()
+            if "L.Draw.Event.EDITED" in linha and "redrawFromLayer" in linha
+        ]
+        self.assertTrue(registos, "o redesenho deixou de estar ligado ao EDITED")
+        for linha in registos:
+            self.assertIn(
+                "function",
+                linha,
+                "o evento do EDITED seria tomado como raio; envolver a chamada "
+                f"numa função que não recebe argumentos: {linha}",
+            )
 
     def test_every_visible_form_field_has_a_label(self) -> None:
         """Campos escondidos não são anunciados, logo não precisam de rótulo."""
