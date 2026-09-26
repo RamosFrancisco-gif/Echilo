@@ -693,6 +693,36 @@ tudo aqui vem dessa mudança.
   antes da seguinte, e o catálogo fica sem fotografias sem nenhum erro.
   Todo o media vai para a Cloudinary, e produção recusa arrancar sem
   `CLOUDINARY_URL` em vez de o descobrir com o cliente à frente.
+- **O `requirements.txt` é uma afirmação sobre o que foi testado, e não sobre o
+  que existe.** O build da Vercel resolve os limites e instala o que apanhar, e
+  um limite largo é uma promessa que ninguém cumpre.
+  - **`Django<5.1` instalava o 5.0, e o 5.0 removeu a assinatura de quatro
+    argumentos de `assertFormError`** que os testes daqui usam. O build ficava a
+    correr um Django que a suite não passa, e o sintoma eram três
+    `AttributeError` em testes que já não tinham nada a ver com o deploy. Agora
+    é `>=4.2,<5.0`, e a escolha é do §2.13, que razona sobre o comportamento do
+    4.2. Um `Django` mais recente não é uma melhoria: é um Django diferente.
+  - **`pymysql.__version__` devolve uma versão inventada.**
+    `install_as_MySQLdb()` reescreve `__version__` e `version_info` para
+    satisfazer a verificação de versão que o Django faz ao `mysqlclient`. Ler
+    essa propriedade para saber o que está instalado dá uma resposta errada com
+    ar de certa — e foi assim que se declarou um `PyMySQL>=2.2` que não existe
+    no PyPI, o que faz o build falhar a resolver. A versão verdadeira é a dos
+    metadados, e é essa que o `pip` resolve.
+  - **`test_o_intervalo_declarado_contem_a_versao_instalada`** compara cada
+    intervalo declarado com a versão instalada, e é o que apanha a deriva. Vale
+    para o pacote que vier a seguir, que é o ponto: o teste não é sobre o Django
+    nem sobre o PyMySQL.
+  - **Uma dependência por declarar desaparece em silêncio.** O `requests` só é
+    usado pelo `build_admin_boundaries`, e estava importado no topo do comando
+    sem estar no `requirements.txt`. O efeito não foi um erro: os testes de
+    `apps.properties` deixaram de ser importados, e a suite perdeu 128 testes sem
+    que a contagem o dissesse. Por isso o import é feito dentro da função, e o
+    `requests` fica a ser dependência de desenvolvimento — um comando que recusa
+    correr fora de desenvolvimento não leva o seu `requests` para dentro de cada
+    função serverless.
+  - **A versão do Python está em `.python-version`.** Sem ela a Vercel deduce a
+    sua, e o build de hoje pode ser o de amanhã com outra interpretação.
 - **A base de dados também muda de figura.** É um MySQL do Aiven, e a função
   é remota para ele. A ligação é privilegiada, e um `TypeError` na primeira
   tentativa é um deploy que parece azul e não deixa entrar ninguém.

@@ -4,7 +4,12 @@ __pycache__/
 venv/
 env/
 
-.env
+# Ficheiros de ambiente: nenhum vai para o Git, e os exemplos entram à mão.
+# Ignora-se a família toda em vez de só o `.env`, porque um `.env1` ou um
+# `.env.production` esquecido aparecia como untracked e entrava no `git add -A`
+# seguinte — sem erro, sem aviso, com a senha de produção no histórico.
+.env*
+!.env*.example
 *.sqlite3
 /media/
 /staticfiles/

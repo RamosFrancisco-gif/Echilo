@@ -289,6 +289,76 @@ class DependenciasTests(SimpleTestCase):
     def _requisitos(self) -> str:
         return (RAIZ / "requirements.txt").read_text(encoding="utf-8")
 
+    @staticmethod
+    def _numeros(versao: str) -> tuple[int, ...]:
+        """Compara versões pelos números, que é tudo o que estes limites usam.
+
+        O `packaging` resolvia isto melhor, e não está declarado em
+        `requirements.txt` — verificou-se numa máquina limpa. Usá-lo aqui seria
+        repetir exactamente a dependência por declarada que este teste existe para
+        apanhar, e o erro apareceria só no build da Vercel.
+        """
+        partes = []
+        for pedaco in versao.split("."):
+            digitos = "".join(caractere for caractere in pedaco if caractere.isdigit())
+            if not digitos:
+                break
+            partes.append(int(digitos))
+        return tuple(partes) or (0,)
+
+    def _intervalo_contem(self, especificador: str, versao: str) -> bool:
+        """Diz se a versão instalada satisfaz o intervalo declarado."""
+        instalada = self._numeros(versao)
+        for termo in (t.strip() for t in especificador.split(",")):
+            if termo.startswith(">="):
+                if instalada < self._numeros(termo[2:]):
+                    return False
+            elif termo.startswith("<="):
+                if instalada > self._numeros(termo[2:]):
+                    return False
+            elif termo.startswith(">"):
+                if instalada <= self._numeros(termo[1:]):
+                    return False
+            elif termo.startswith("<"):
+                if instalada >= self._numeros(termo[1:]):
+                    return False
+            elif termo.startswith("=="):
+                if instalada != self._numeros(termo[2:]):
+                    return False
+        return True
+
+    def test_o_intervalo_declarado_contem_a_versao_instalada(self) -> None:
+        """O build da Vercel instala o que o intervalo permite, não o que foi testado.
+
+        `Django<5.1` resolvia para 5.0 na Vercel, e o 5.0 removeu a assinatura de
+        quatro argumentos de `assertFormError` que os testes daqui usam. O build
+        ficava a correr um Django que a suite não passa, e nada no repositório
+        dizia que aquilo não era o que se pensava estar a correr.
+
+        O teste é sobre a distância entre as duas coisas, e não sobre nenhum pacote
+        em concreto: vale para o que vier a seguir.
+        """
+        from importlib.metadata import PackageNotFoundError, version
+
+        for linha in self._requisitos().splitlines():
+            linha = linha.split("#", 1)[0].strip()
+            if not linha:
+                continue
+            fim = 0
+            while fim < len(linha) and (linha[fim].isalnum() or linha[fim] in "._-"):
+                fim += 1
+            nome, intervalo = linha[:fim], linha[fim:]
+            try:
+                instalada = version(nome)
+            except PackageNotFoundError:  # pragma: no cover - ambiente incompleto
+                self.fail(f"{nome} está em requirements.txt e não está instalado.")
+            self.assertTrue(
+                self._intervalo_contem(intervalo, instalada),
+                f"{nome} {instalada} está instalada e o requirements.txt aceita "
+                f"apenas {intervalo}. O build vai instalar outra versão, e é essa "
+                "que vai para a Vercel.",
+            )
+
     def test_o_mysqlclient_esta_fora_porque_exige_headers_de_c(self) -> None:
         """A Vercel não tem headers do MySQL, e o build falhava antes do Django.
 

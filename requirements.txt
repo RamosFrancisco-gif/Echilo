@@ -1,4 +1,16 @@
-Django>=4.2,<5.1
+# Os limites são o que está testado, e não o que existe.
+#
+# `Django<5.1` resolvia para 5.0 no build da Vercel, e o 5.0 removeu a assinatura
+# de quatro argumentos de `assertFormError` que os testes daqui usam: o build
+# ficava a correr um Django que a suite não passa. `apps.core.test_deploy` compara
+# o intervalo declarado com a versão instalada, que é o que apanha a deriva.
+#
+# O `PyMySQL` fica em `<2` porque a 2.x não existe no PyPI. Vale a pena dizer
+# porque é tentador o contrário: `pymysql.__version__` devolve uma versão
+# inventada, porque `install_as_MySQLdb()` a reescreve para satisfazer a
+# verificação de versão do Django. A versão verdadeira é a dos metadados, e é essa
+# que o `pip` resolve.
+Django>=4.2,<5.0
 PyMySQL>=1.1,<2
 cryptography>=42.0
 Pillow>=10.0
@@ -6,3 +18,9 @@ python-dotenv>=1.0
 whitenoise>=6.5
 groq>=1.0
 cloudinary>=1.40
+
+# `requests` não vem aqui. Só o `build_admin_boundaries` fala com a rede, e esse
+# comando recusa correr fora de desenvolvimento, o que faz do `requests` uma
+# dependência de desenvolvimento. Declará-lo aqui punha 1 MB de urllib3 e idna
+# dentro de cada função serverless para um comando que lá nunca corre. O import é
+# feito dentro da função, e a ausência do pacote só se nota se a tentares usar.

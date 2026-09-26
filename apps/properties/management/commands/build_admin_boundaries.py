@@ -47,7 +47,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
 
-import requests
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
@@ -340,11 +339,40 @@ def descarrega(ficheiro: str) -> dict[str, Any]:
 
     Fica em cache porque as províncias são pedidas duas vezes: uma para gravar e
     outra para o teste de pertença, e são 19 MB.
+
+    O `requests` é importado aqui e não no topo do ficheiro. Este comando é a
+    única coisa do projecto que fala com a rede, e recusa correr fora de
+    desenvolvimento — logo, o `requests` é uma dependência de desenvolvimento e
+    não pertence ao `requirements.txt`. Importado no topo, fazia o módulo
+    depender de um pacote que a Vercel não instala, e a consequência foi
+    silenciosa: os testes de `apps.properties` deixavam de ser importados e
+    desaparecia 128 testes da suite sem que a contagem desse isso por si.
     """
 
+    try:
+        import requests
+    except ImportError as erro:
+        # O pacote em falta é o caso mais provável de todos, e o mais mal
+        # explicado: um `ModuleNotFoundError` a meio de uma traceback não diz que
+        # se trata de uma dependência de desenvolvimento. Ver o `requirements.txt`.
+        raise CommandError(
+            "Falta o pacote `requests`, que é uma dependência de desenvolvimento e "
+            "por isso não está no requirements.txt. Instala-o com "
+            "`pip install requests` e volta a correr."
+        ) from erro
+
     url = f"{BASE}/{ficheiro}/geoBoundaries-AGO-{ficheiro}.geojson"
-    resposta = requests.get(url, timeout=600)
-    resposta.raise_for_status()
+    try:
+        resposta = requests.get(url, timeout=600)
+        resposta.raise_for_status()
+    except requests.RequestException as erro:
+        # Traduzido aqui, e não em `verifica_deriva`, porque a rede é chamada nos
+        # dois caminhos — gerar e verificar. Traduzir só num deles deixava o outro a
+        # responder com uma traceback em vez de uma mensagem que diz o que falta.
+        raise CommandError(
+            f"Não consegui falar com a fonte ({erro}). O comando precisa de rede, e "
+            "sem rede não dá para verificar a deriva."
+        ) from erro
     return resposta.json()
 
 
@@ -578,13 +606,7 @@ class Command(BaseCommand):
 
     def verifica_deriva(self) -> None:
         """Falha se os ficheiros versionados já não batem com a fonte."""
-        try:
-            documentos = self.documentos()
-        except requests.RequestException as erro:
-            raise CommandError(
-                f"Não consegui falar com a fonte ({erro}). Sem rede não dá para "
-                f"verificar a deriva; o comando continua disponível para gerar."
-            ) from erro
+        documentos = self.documentos()
 
         divergentes = []
         for caminho, esperado in documentos.items():
