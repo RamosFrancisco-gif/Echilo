@@ -16,7 +16,9 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.conf import settings
 from django.core.cache import caches
@@ -517,3 +519,111 @@ class ComandosDeDesenvolvimentoTests(SimpleTestCase):
             posicao_travao,
             "O travão está antes do `--check` e trava a verificação.",
         )
+
+
+class TlsDoMysqlTests(SimpleTestCase):
+    """A base de produção é um MySQL do Aiven, e o Aiven fala TLS com CA própria.
+
+    O `OPTIONS` do MySQL do Django não é um dicionário que o Django conheça: é
+    copiado tal e qual para o `connect()` do driver. Uma chave que o driver não
+    aceite não é ignorada em silêncio — é um `TypeError` na primeira ligação, e a
+    primeira ligação é a primeira conta a tentar entrar. Como ninguém abre a
+    aplicação no CI, o sintoma aparece em produção e não antes.
+    """
+
+    def _opcoes(self, **variaveis: str) -> dict[str, object]:
+        from config.settings.base import db_options
+
+        with mock.patch.dict(os.environ, variaveis, clear=False):
+            return db_options()
+
+    def test_as_opcoes_do_mysql_sao_todas_aceites_pelo_pymysql(self) -> None:
+        """Uma chave que o driver não conhece morre na ligação, não no arranque.
+
+        Este teste é a razão de o `ssl-mode=REQUIRED` do URI do Aiven não ter sido
+        escrito tal e qual nas `OPTIONS`: `ssl_mode` não é um parâmetro do PyMySQL,
+        e o `TypeError` só apareceria a meio de um deploy.
+        """
+        import inspect
+
+        import pymysql
+
+        aceite = set(inspect.signature(pymysql.Connection.__init__).parameters)
+        aceite.discard("self")
+        with tempfile.TemporaryDirectory() as pasta:
+            ca = Path(pasta) / "ca.pem"
+            ca.write_text("certificado de teste\n", encoding="utf-8")
+            opcoes = self._opcoes(DJANGO_DB_SSL_CA=str(ca))
+        desconhecidas = sorted(set(opcoes) - aceite)
+        self.assertEqual(
+            desconhecidas,
+            [],
+            f"O PyMySQL não aceita {desconhecidas}. Ou o nome está errado, ou é de "
+            "outro driver, e a ligação morre com TypeError na primeira tentativa.",
+        )
+
+    def test_a_ca_entra_como_ssl_e_nao_como_ssl_mode(self) -> None:
+        """O `REQUIRED` do PyMySQL vive dentro de `ssl.verify_mode`."""
+        with tempfile.TemporaryDirectory() as pasta:
+            ca = Path(pasta) / "ca.pem"
+            ca.write_text("certificado de teste\n", encoding="utf-8")
+            opcoes = self._opcoes(DJANGO_DB_SSL_CA=str(ca))
+        self.assertNotIn("ssl_mode", opcoes)
+        self.assertEqual(opcoes["ssl"]["verify_mode"], "required")
+        self.assertTrue(opcoes["ssl"]["check_hostname"])
+        self.assertEqual(opcoes["ssl"]["ca"], str(ca))
+
+    def test_a_ca_que_nao_existe_diz_qual_variavel_falhou(self) -> None:
+        """O erro do driver seria um `FileNotFoundError` dentro do PyMySQL.
+
+        Uma stack de três níveis a dizer que falta um ficheiro, quando o que
+        falta é uma variável de ambiente, é o tipo de coisa que se procura no
+        sítio errado durante uma hora.
+        """
+        from django.core.exceptions import ImproperlyConfigured
+
+        with self.assertRaises(ImproperlyConfigured) as contexto:
+            self._opcoes(DJANGO_DB_SSL_CA="config/certs/nao-existe.pem")
+        self.assertIn("DJANGO_DB_SSL_CA", str(contexto.exception))
+
+    def test_sem_ca_nao_ha_ssl_nas_opcoes(self) -> None:
+        """Desenvolvimento fica como estava: `PREFERRED` é o default do driver."""
+        self.assertNotIn("ssl", self._opcoes(DJANGO_DB_SSL_CA=""))
+
+    def test_o_charset_vence_o_do_backend(self) -> None:
+        """`utf8mb4` só entra em vigor porque o `OPTIONS` é copiado depois.
+
+        O backend MySQL do Django começa por pôr `utf8` nos parâmetros e só no
+        fim faz `kwargs.update(options)`. Tirá-lo daqui põe o `utf8` de volta, e
+        o sintoma é um `OperationalError` sobre `utf8mb4` numa tabela que já tem
+        emoji — ou seja, muito depois, e sem nada a dizer do charset.
+        """
+        self.assertEqual(self._opcoes()["charset"], "utf8mb4")
+
+    def test_sem_ca_a_producao_com_host_remoto_nao_arranca(self) -> None:
+        """A senha da base atravessa a rede, e sem CA não há prova de quem a pede.
+
+        Sem `DJANGO_DB_SSL_CA` o PyMySQL entra em modo `PREFERRED`: tenta TLS e,
+        se o servidor não oferecer, continua em texto claro. Arrancar assim parece
+        funcionar, que é precisamente o problema.
+        """
+        resultado = _python(
+            "import django; django.setup()",
+            {"DJANGO_DB_HOST": "mysql-exemplo.f.aivencloud.com"},
+        )
+        self.assertNotEqual(resultado.returncode, 0)
+        self.assertIn("DJANGO_DB_SSL_CA", resultado.stderr)
+
+    def test_com_ca_a_producao_arranca(self) -> None:
+        """Com a CA presente, a produção arranca — que é o que se quer que aconteça."""
+        with tempfile.TemporaryDirectory() as pasta:
+            ca = Path(pasta) / "ca.pem"
+            ca.write_text("certificado de teste\n", encoding="utf-8")
+            resultado = _python(
+                "import django; django.setup()",
+                {
+                    "DJANGO_DB_HOST": "mysql-exemplo.f.aivencloud.com",
+                    "DJANGO_DB_SSL_CA": str(ca),
+                },
+            )
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)

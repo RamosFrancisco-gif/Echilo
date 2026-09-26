@@ -7,6 +7,7 @@ from .base import (
     ALLOWED_HOSTS,
     CLOUDINARY_PUBLICAO,
     CLOUDINARY_URL,
+    DATABASES,
     MANAGER_EMAILS,
     SECRET_KEY,
     env,
@@ -61,6 +62,24 @@ SECURE_REFERRER_POLICY = "same-origin"
 # `CONN_MAX_AGE = 0` ao nível do módulo criava um nome novo que nada lia, e o
 # pooling continuava a 60 s sem dizer nada.
 DATABASES["default"]["CONN_MAX_AGE"] = env_int("DJANGO_CONN_MAX_AGE", 0)
+
+# A base de produção do Aiven não está na mesma máquina, e a ligação atravessa
+# a rede. Sem `DJANGO_DB_SSL_CA` o PyMySQL entra em modo `PREFERRED`: tenta TLS,
+# e se o servidor não oferecer continua em texto claro — sem erro, sem aviso.
+# Com a CA configurada a verificação é real, e a senha deixa de poder ser lida
+# por quem se faça passar pelo servidor.
+#
+# A excepção é a base local, onde não há nada para interceptar. Reconhece-se pelo
+# nome, e não por um interruptor: um interruptor que alguém desligue para
+# Destinationário pode desligar-se para qualquer.
+_HOSTS_SEM_REDE = {"localhost", "127.0.0.1", "::1", ""}
+if DATABASES["default"]["HOST"] not in _HOSTS_SEM_REDE:  # pragma: no cover - arranque
+    if not env("DJANGO_DB_SSL_CA"):
+        raise ImproperlyConfigured(
+            "DJANGO_DB_SSL_CA é obrigatória em produção: sem a CA, o PyMySQL "
+            "tenta TLS mas não verifica o certificado do servidor, e a senha da "
+            "base passa pela rede sem que ninguém prove quem está do outro lado."
+        )
 
 # `base` já montou um `STORAGES` com o `DEBUG` que encontrou no ambiente, que em
 # produção é o do ficheiro `.env` local e não o daqui. A decisão é reescrita com a

@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 load_dotenv(BASE_DIR / ".env")
-
 
 def env(key: str, default: str = "") -> str:
     """Lê uma variável de ambiente devolvendo `default` quando ausente."""
@@ -103,6 +103,54 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
+def db_options() -> dict[str, object]:
+    """Monta as `OPTIONS` do MySQL, e decide se a ligação é cifrada.
+
+    O `OPTIONS` do Django não é um dicionário que o Django conheça: em MySQL ele
+    é copiado tal e qual para o `connect()` do driver. Uma chave que o driver não
+    aceite não é ignorada, é um `TypeError` na primeira ligação — e a primeira
+    ligação é a primeira conta a tentar entrar.
+
+    Daí a parte que não é óbvia. Um URI do Aiven vem com `ssl-mode=REQUIRED`, e
+    essa palavra não pode ser passada: o PyMySQL não tem `ssl_mode`, e o
+    `ssl-mode` do URI é para clientes que falam o protocolo dele. O PyMySQL
+    entende `ssl`, com `ca`, `check_hostname` e `verify_mode` — que é o que
+    transformam "cifrado" em "cifrado e verificado".
+
+    A distinção importa. Sem nada disto o PyMySQL entra em modo `PREFERRED`:
+    tenta TLS e, se o servidor não oferecer, continua em texto claro. Com a CA
+    configurada, a verificação passa a ser real, e a senha de produção deixa de
+    poder ser lida por quem se faça passar pelo servidor.
+    """
+    opcoes: dict[str, object] = {
+        # `utf8mb4` só entra em vigor porque o `OPTIONS` é copiado depois dos
+        # parâmetros que o Django já tinha montado. O backend começa por pôr
+        # `utf8` e só no fim faz `kwargs.update(options)`, o que faz este
+        # dicionário ganhar. Tirá-lo daqui repõe o `utf8` em silêncio.
+        "charset": "utf8mb4",
+        "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
+        "connect_timeout": env_int("DJANGO_DB_TIMEOUT", 10),
+    }
+    ca = env("DJANGO_DB_SSL_CA")
+    if ca:
+        caminho = Path(ca)
+        if not caminho.is_file():
+            # Falhar aqui vale mais do que falhar na ligação: o erro do driver é
+            # um `FileNotFoundError` dentro do PyMySQL, numa stack de três
+            # níveis que não diz que a variável está mal posta.
+            raise ImproperlyConfigured(
+                f"DJANGO_DB_SSL_CA aponta para {ca}, que não existe. O MySQL do "
+                "Aiven usa uma CA própria do serviço, e o certificado baixa-se "
+                "na consola, em Connection settings. Ver config/certs/README.md."
+            )
+        opcoes["ssl"] = {
+            "ca": str(caminho),
+            "check_hostname": env_bool("DJANGO_DB_SSL_VERIFICAR_HOST", default=True),
+            "verify_mode": "required",
+        }
+    return opcoes
+
+
 DATABASES = {
     "default": {
         "ENGINE": env("DJANGO_DB_ENGINE", "django.db.backends.mysql"),
@@ -111,10 +159,7 @@ DATABASES = {
         "PASSWORD": env("DJANGO_DB_PASSWORD"),
         "HOST": env("DJANGO_DB_HOST", "127.0.0.1"),
         "PORT": env("DJANGO_DB_PORT", "3306"),
-        "OPTIONS": {
-            "charset": "utf8mb4",
-            "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
-        },
+        "OPTIONS": db_options(),
         "CONN_MAX_AGE": 60,
     }
 }

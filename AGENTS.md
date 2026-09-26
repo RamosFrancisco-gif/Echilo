@@ -646,6 +646,9 @@ Directrizes visuais herdadas dos protótipos existentes:
 | `DJANGO_DEBUG` | `true` / `false`. |
 | `DJANGO_ALLOWED_HOSTS` | Lista separada por vírgulas. |
 | `DJANGO_DB_*` | `NAME`, `USER`, `PASSWORD`, `HOST`, `PORT`. |
+| `DJANGO_DB_SSL_CA` | Caminho para o `ca.pem` do serviço Aiven. Obrigatório em produção com host remoto. Ver `config/certs/README.md`. |
+| `DJANGO_DB_SSL_VERIFICAR_HOST` | `false` só para depurar. `true` por omissão. |
+| `DJANGO_DB_TIMEOUT` | Segundos de espera da ligação MySQL. Predefinido: `10`. |
 | `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | SMTP. |
 | `EMAIL_USE_TLS` | `true` / `false`. |
 | `DEFAULT_FROM_EMAIL` | Remetente do sistema. |
@@ -690,6 +693,34 @@ tudo aqui vem dessa mudança.
   antes da seguinte, e o catálogo fica sem fotografias sem nenhum erro.
   Todo o media vai para a Cloudinary, e produção recusa arrancar sem
   `CLOUDINARY_URL` em vez de o descobrir com o cliente à frente.
+- **A base de dados também muda de figura.** É um MySQL do Aiven, e a função
+  é remota para ele. A ligação é privilegiada, e um `TypeError` na primeira
+  tentativa é um deploy que parece azul e não deixa entrar ninguém.
+  - **O `OPTIONS` do MySQL é o `connect()` do driver.** O Django 4.2 copia-o
+    tal e qual, depois de tirar `isolation_level`. Uma chave que o PyMySQL não
+    conheça não é ignorada: é um `TypeError` na ligação, e a ligação só
+    acontece a alguém a abrir o sítio. `apps.core.test_deploy.TlsDoMysqlTests`
+    compara as chaves com a assinatura do `connect()` do PyMySQL, e é isso que
+    apanha o erro antes do deploy.
+  - **O `ssl-mode=REQUIRED` do URI do Aiven não vai para as `OPTIONS`.** O
+    PyMySQL não tem `ssl_mode`; o `REQUIRED` dele vive dentro de
+    `ssl.verify_mode`. Copiar a palavra do URI dá um `TypeError` numa stack que
+    não menciona TLS. Ver `db_options()`.
+  - **Sem `DJANGO_DB_SSL_CA` a ligação não é segura, e parece que é.** O
+    PyMySQL entra em modo `PREFERRED`: tenta TLS e, se o servidor não oferecer,
+    continua em texto claro, sem erro e sem aviso. E mesmo quando há TLS sem
+    `ca`, o certificado do servidor não é verificado — encriptado, mas sem
+    prova de quem está do outro lado, que é o que o homem no meio quer. Por isso
+    a CA do serviço é versionada em `config/certs/` e produção **recusa
+    arrancar** com um host remoto sem ela. Recusar é a única forma de este
+    erro não aparecer já em produção.
+  - **A excepção é a base local**, reconhecida pelo nome e não por um
+    interruptor: um interruptor que alguém desligue para testar pode ser
+    desligado para sempre.
+  - **O `utf8mb4` do `charset` está no sítio certo por um motivo que não se
+    vê.** O backend põe `utf8` e só depois faz `kwargs.update(options)`, o que
+    faz o `OPTIONS` ganhar. Tirá-lo repõe o `utf8` em silêncio, e o primeiro
+    sinal é um `OperationalError` numa tabela com emoji.
 - `CONN_MAX_AGE = 0`. Uma ligação MySQL mantida para reaproveitar ocupa uma
   das poucas ligações do plano durante quase mais um minuto do que precisava.
 - O cache em memória é novo a cada invocação. O limitador de tentativas do §6
