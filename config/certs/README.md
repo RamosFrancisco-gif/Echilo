@@ -22,6 +22,18 @@ certificado novo e a variável que o aponta. Uma CA trocada sem o
 verificar o servidor e continua a funcionar — que é a falha mais
 perigosa deste ficheiro, porque não dá erro.
 
+## A CA que está no ficheiro
+
+O `aiven-mysql-ca.pem` versionado é a CA do projecto
+`ff865d53-532d-4420-8ab9-f1172e37fd0f`, e assina o serviço
+`mysql-2cc64372-1`. Vale de 2026-08-31 a 2036-08-28.
+
+Dizemos o nome da CA porque ela não é um certificado qualquer: é a âncora
+de confiança de um projecto, e trocá-la por outra sem querer transforma uma
+ligação verificada numa que valida contra a pessoa errada. O nome do serviço
+que assina está no certificado do servidor, e é por aí que se começa a
+verificar.
+
 ## Porque `ssl-mode=REQUIRED` não chega
 
 O URI do Aiven traz `ssl-mode=REQUIRED`, e essa palavra é para clientes
