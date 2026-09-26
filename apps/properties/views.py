@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_address
+
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http import (
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseNotAllowed,
+    HttpResponseRedirect,
+    JsonResponse,
+)
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView, FormView, ListView, View
 
 from apps.core.maps import area_map_config
-from apps.core.permissions import require_team_member
+from apps.core.permissions import require_document_access, require_team_member
+from apps.core.ratelimit import client_ip
+from apps.core.storage import CloudinaryDocumentStorage
 
 from .forms import (
     PropertyCuratorForm,
@@ -20,11 +31,34 @@ from .forms import (
     PropertyTransitionForm,
     PublicSearchForm,
 )
-from .models import Property, PropertyImage, PropertySubmission
+from .models import (
+    DocumentAccessLog,
+    Property,
+    PropertyDocument,
+    PropertyImage,
+    PropertySubmission,
+)
+from .reference import ANGOLA_PROVINCES, province_label
 from .selectors import PropertyFilters, PropertyQueryService
 from .services import add_image, build_map_payload, create_property, resolve_owner
 
 PAGE_SIZE = 12
+
+
+def ip_de_auditoria(request: HttpRequest) -> str | None:
+    """Endereço de quem pediu o documento, ou `None` quando não é um endereço.
+
+    O `client_ip` serve-se de `REMOTE_ADDR` como recurso e devolve
+    "desconhecido" quando não o encontra, porque uma chave de cache tem sempre de
+    ser uma string. Uma coluna `GenericIPAddressField` não aceita essa palavra e
+    o registo de auditoria deixava de ser gravado — que é a pior forma de falhar
+    uma auditoria: calar-se em silêncio em vez de dizer que não conseguiu.
+    """
+    candidato = client_ip(request)
+    try:
+        return str(ip_address(candidato))
+    except ValueError:
+        return None
 
 
 class HomeView(ListView):
@@ -56,14 +90,16 @@ class HomeView(ListView):
         return context
 
     def get_province_choices(self) -> list[tuple[str, str]]:
-        """Opções de província marcadas apenas com as que têm imóveis publicados."""
-        from .reference import ANGOLA_PROVINCES, province_label
+        """Oferece as 21 províncias, e não só as que já têm imóveis publicados.
 
-        used = set(
-            Property.objects.published().values_list("province_ref", flat=True).distinct()
-        )
+        A home e o catálogo são a mesma pesquisa em dois sítios: um selector que
+        aqui esconde Zaire e no catálogo mostra é uma resposta diferente à mesma
+        pergunta, e quem só passa pela home nunca chega a ver o país inteiro.
+        Uma província sem imóveis é um resultado vazio, que é honesto; uma
+        província que o produto não menciona é uma que não existe para quem lê.
+        """
         return [("", "Toda Angola")] + [
-            (code, province_label(label)) for code, label in ANGOLA_PROVINCES if code in used
+            (code, province_label(label)) for code, label in ANGOLA_PROVINCES
         ]
 
 
@@ -99,7 +135,8 @@ class PropertyListView(ListView):
                 "clear_area_query": self.filters.chip_query(
                     center_lat="", center_lon="", radius_m=""
                 ),
-                "available_municipalities": PropertyQueryService.available_areas(),
+                "municipality_suggestions": self.municipality_suggestions(),
+                "municipality_options_url": reverse("properties:municipalities"),
                 "purpose_choices": Property.Purpose.choices,
                 "type_choices": Property.Type.choices,
                 "map_config": area_map_config(),
@@ -107,6 +144,10 @@ class PropertyListView(ListView):
             }
         )
         return context
+
+    def municipality_suggestions(self) -> list[str]:
+        """Sugere os municípios da província escolhida, mais os que têm imóveis publicados."""
+        return PropertyQueryService.municipality_suggestions(self.filters.province)
 
     def render_to_response(self, context: dict[str, object], **response_kwargs: object) -> HttpResponse:
         """Devolve só os resultados quando o pedido vem do HTMX."""
@@ -164,6 +205,7 @@ class CuratorPropertyCreateView(FormView):
         """Descreve a etapa de cadastro no cabeçalho do formulário."""
         context = super().get_context_data(**kwargs)
         context["form_title"] = "Registar imóvel curado"
+        context["municipality_options_url"] = reverse("properties:municipalities")
         context["form_intro"] = (
             "Só a equipa do Echilo regista imóveis. Confirme os dados já verificados "
             "durante a triagem antes de guardar."
@@ -234,14 +276,25 @@ class CuratorPropertyDetailView(FormView):
         """Junta o estado da triagem, a documentação e o histórico de estados."""
         context = super().get_context_data(**kwargs)
         prop = self.get_object()
+        # `self.request` e não `kwargs["request"]`: o `kwargs` só traz o pedido
+        # quando o `get()` o repassa, e um `get()` que chame
+        # `render_to_response(self.get_context_data())` não o repassa. Ficar a
+        # ler de `kwargs` dava um `KeyError` só nessa página e em nenhum teste
+        # que não a visitasse por esse caminho.
+        pedido = self.request
         submission = getattr(prop, "submission", None)
         context.update(
             {
                 "property": prop,
                 "submission": submission,
+                "municipality_options_url": reverse("properties:municipalities"),
                 "missing_items": submission.pending_items() if submission else [],
                 "ready_for_review": bool(submission and submission.is_ready_for_review()),
                 "missing_documents": prop.missing_verified_documents(),
+                "documents": prop.documents.select_related("verified_by").order_by(
+                    "document_type"
+                ),
+                "can_validate_documents": getattr(pedido.user, "can_validate", False),
                 "allowed_transitions": [
                     (target, label)
                     for target, label in Property.Status.choices
@@ -338,6 +391,84 @@ class CuratorPropertyImageView(View):
         add_image(prop=prop, image=PropertyImage(image=form.cleaned_data["image"]))
         messages.success(request, _("Fotografia adicionada."))
         return HttpResponseRedirect(f"{target_url}#fotografias")
+
+
+class MunicipalityOptionsView(View):
+    """As sugestões de município de uma província, para o campo do filtro.
+
+    Existe para que a página do catálogo não leve os cento e setenta e um
+    nomes no HTML à espera de alguém escrever numa caixa. O que o campo oferece
+    tem de ser só o da província escolhida — escrever no código-fonte todas as
+    províncias é o mesmo que oferecer todas, e a promessa que o filtro faz é
+    outra.
+
+    Devolve a mesma lista que a vista do catálogo escreve no `<datalist>`, porque
+    as duas chamam o mesmo selector. Divergir aqui era ter duas verdades sobre
+    o que o campo oferece, e a divergência aparecia na segunda mudança de
+    província.
+    """
+
+    def get(self, request: HttpRequest) -> JsonResponse:
+        provincia = str(request.GET.get("province", ""))
+        return JsonResponse(
+            {"sugestoes": PropertyQueryService.municipality_suggestions(provincia)}
+        )
+
+
+class PropertyDocumentView(View):
+    """Entrega um documento legal a quem tem permissão, e a mais ninguém (§6).
+
+    A Cloudinary guarda o ficheiro como `authenticated`, e por isso não o serve
+    a quem não trouxer um link assinado. Esta vista é quem emite esse link: exige
+    sessão activa, exige perfil `AGENT` ou `ADMIN`, regista quem abriu e em que
+    momento, e só então redirecciona.
+
+    O redireccionamento é de propósito. Servir os bytes aqui obrigaria a cada
+    função da Vercel a puxar o ficheiro inteiro, a gastá-lo do limite de 10 s e
+    da memória, e a manter o ficheiro a passar por um servidor que não precisa
+    dele. A Cloudinary entrega-o directamente a quem provou que tem direito.
+
+    O `identificador` é o `public_id` que a storage gerou: um `uuid4` em hexadecimal.
+    Não é sequencial e não é adivinhável, que é o que torna o link curto de vida
+    e ainda assim difícil de usar por outra pessoa.
+    """
+
+    def dispatch(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
+        """Restringe a leitura à equipa autorizada e só aceita GET."""
+        if not request.user.is_authenticated:
+            raise PermissionDenied("Entre na sua conta para aceder à curadoria.")
+        require_document_access(request)
+        if request.method != "GET":
+            return HttpResponseNotAllowed(["GET"])
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request: HttpRequest, identificador: str) -> HttpResponse:
+        """Registra o acesso e devolve o link temporário da Cloudinary."""
+        document = get_object_or_404(
+            PropertyDocument.objects.select_related("property"),
+            file=identificador,
+        )
+        if not document.file:
+            raise Http404("Este documento ainda não tem ficheiro.")
+
+        DocumentAccessLog.objects.create(
+            document=document,
+            actor=request.user,
+            ip_address=ip_de_auditoria(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", "")[:200],
+        )
+
+        link = CloudinaryDocumentStorage().link_assinado(document.file.name)
+        if not link:
+            messages.error(request, _("O ficheiro não está disponível de momento."))
+            return HttpResponseRedirect(
+                reverse("properties:curator_detail", args=[document.property.reference])
+            )
+
+        resposta = HttpResponseRedirect(link)
+        resposta["Cache-Control"] = "no-store"
+        resposta["Referrer-Policy"] = "no-referrer"
+        return resposta
 
 
 def property_not_published(request: HttpRequest, reference: str) -> HttpResponse:

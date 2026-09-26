@@ -5,8 +5,10 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from django import forms
+from PIL import Image, UnidentifiedImageError
 
 from apps.core.forms import BaseStyledForm
+from apps.core.storage import FORMATOS_IMAGEM
 from apps.core.validators import (
     MAX_SEARCH_RADIUS_M,
     MIN_SEARCH_RADIUS_M,
@@ -192,7 +194,12 @@ class PropertyCuratorForm(BaseStyledForm):
         super().__init__(*args, **kwargs)
         instance = getattr(self, "instance", None)
         submitted = self.data.get("province_ref") if self.data else None
-        province = submitted or getattr(instance, "province_ref", "") or ""
+        # A ficha interna passa os dados do imóvel em `initial`, e não como
+        # instância. Ler só a instância dava uma província vazia, e a lista
+        # oferecia os cento e setenta e um nomes a quem via um imóvel de
+        # Benguela: um campo que parece funcionar e não sugere nada do que devia.
+        inicial = (self.initial or {}).get("province_ref")
+        province = submitted or inicial or getattr(instance, "province_ref", "") or ""
         self.fields["municipality"].widget = forms.TextInput(
             attrs={
                 "class": "field-control",
@@ -296,10 +303,39 @@ class PropertyImageUploadForm(BaseStyledForm):
         super().__init__(*args, **kwargs)
 
     def clean_image(self) -> object:
-        """Recusa imagens acima do limite de peso definido no projecto."""
+        """Valida peso, formato e dimensões da fotografia (§6).
+
+        O `ImageField` do Django valida o cabeçalho, não a imagem: um executável
+        renomeado a `.jpg` passa. Abrir com Pillow é o que separa uma fotografia
+        de um ficheiro         que diz ser uma. E as dimensões importam por si — uma
+        fotografia de 40 000 px de lado não é uma fotografia de um imóvel, é um
+        erro de alguém, e enche o cartão de catálogo em três lados.
+
+        O re-codificação fica para a Cloudinary, que redimensiona e reescreve o
+        ficheiro antes de o servir. Refazer isso aqui gastaria memória e tempo de
+        CPU dentro dos 10 s da função para se deitar fora.
+        """
         uploaded = self.cleaned_data["image"]
         if uploaded.size > 5 * 1024 * 1024:
             raise forms.ValidationError("A fotografia não pode exceder 5 MB.")
+
+        try:
+            with Image.open(uploaded) as imagem:
+                largura, altura = imagem.size
+                formato = (imagem.format or "").lower()
+        except (UnidentifiedImageError, OSError, ValueError) as erro:
+            raise forms.ValidationError("O ficheiro enviado não é uma imagem válida.") from erro
+
+        if formato not in FORMATOS_IMAGEM:
+            raise forms.ValidationError(
+                "Formato não aceite. Use JPEG, PNG ou WebP."
+            )
+        if max(largura, altura) > 8000:
+            raise forms.ValidationError(
+                "A fotografia tem mais de 8000 px de lado. Reduza-a antes de enviar."
+            )
+
+        uploaded.seek(0)
         return uploaded
 
     def clean(self) -> dict[str, object]:

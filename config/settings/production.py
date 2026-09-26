@@ -3,7 +3,18 @@
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, MANAGER_EMAILS, SECRET_KEY, env_bool
+from .base import (
+    ALLOWED_HOSTS,
+    CLOUDINARY_PUBLICAO,
+    CLOUDINARY_URL,
+    MANAGER_EMAILS,
+    SECRET_KEY,
+    env,
+    env_bool,
+    env_int,
+    env_list,
+    storages,
+)
 
 DEBUG = False
 
@@ -11,6 +22,25 @@ if not SECRET_KEY:  # pragma: no cover - guardião de arranque
     raise ImproperlyConfigured("DJANGO_SECRET_KEY é obrigatória em produção.")
 if not ALLOWED_HOSTS:  # pragma: no cover - guardião de arranque
     raise ImproperlyConfigured("DJANGO_ALLOWED_HOSTS é obrigatória em produção.")
+if not CLOUDINARY_URL:  # pragma: no cover - guardião de arranque
+    raise ImproperlyConfigured(
+        "CLOUDINARY_URL é obrigatória em produção: o MEDIA_ROOT de uma função "
+        "serverless é efémero e apaga o ficheiro no fim da invocação seguinte."
+    )
+
+# A Vercel dá a cada preview um domínio novo e aleatório. Sem este sufixo, cada
+# preview vive com um 400 no ecrã inteiro, e o erro não é de template: é do host.
+if env_bool("VERCEL", default=False) and not any(
+    host.endswith(".vercel.app") for host in ALLOWED_HOSTS
+):  # pragma: no cover - depende do ambiente
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, ".vercel.app"]
+
+# O CSRF compara o `Origin` do browser com uma lista. Na Vercel o domínio de
+# produção é o do projecto e cada preview tem o seu, por isso a lista vem do
+# ambiente e não é adivinhada aqui.
+CSRF_TRUSTED_ORIGINS = [
+    origin for origin in env_list("DJANGO_CSRF_TRUSTED_ORIGINS") if origin
+]
 
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
@@ -22,11 +52,51 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 
-STORAGES = {
-    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
-    },
-}
+# A função da Vercel vive, morre e não volta. Uma ligação mantida por 60 s para
+# um request que dura 300 ms é uma ligação que ocupa uma das poucas do plano
+# Hobby durante quase mais um minuto do que precisava. Zero é a resposta certa
+# quando não há processo persistente para a reaproveitar.
+#
+# Isto vive dentro de `DATABASES["default"]` e não como uma setting de topo:
+# `CONN_MAX_AGE = 0` ao nível do módulo criava um nome novo que nada lia, e o
+# pooling continuava a 60 s sem dizer nada.
+DATABASES["default"]["CONN_MAX_AGE"] = env_int("DJANGO_CONN_MAX_AGE", 0)
+
+# `base` já montou um `STORAGES` com o `DEBUG` que encontrou no ambiente, que em
+# produção é o do ficheiro `.env` local e não o daqui. A decisão é reescrita com a
+# resposta de produção, e a função que a monta é a mesma — o que impede os dois
+# ambientes de divergirem em silêncio.
+STORAGES = storages(manifest=True, cloudinary=CLOUDINARY_PUBLICAO)
+
+# O limitador de tentativas é a única defesa contra força bruta no login, no
+# registo e na recuperação de senha (§6). `LocMemCache` guarda o contador na
+# memória do processo, e em serverless cada invocação é um processo novo: o
+# limite eram cinco tentativas por invocação, e infinitas por pessoa. Por isso a
+# produção usa um cache que sobrevive ao processo.
+if env_bool("DJANGO_CACHE_BD", default=CLOUDINARY_PUBLICAO):
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+            "LOCATION": env("DJANGO_CACHE_LOCATION", "echilo_cache"),
+            # O prazo vai dentro de `OPTIONS`. Escrito ao nível de cima, é aceite
+            # sem erro e ninguém o lê: o backend procura o prazo em `OPTIONS`, e o
+            # que ficou de fora era a conta de tentativas acaducar ao fim dos 300 s
+            # por omissão do Django, ou seja, o prazo que alguém nunca configurou.
+            "OPTIONS": {"TIMEOUT": env_int("DJANGO_CACHE_TIMEOUT", 300)},
+        }
+    }
+else:  # pragma: no cover - cache em memória só para desenvolvimento
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "echilo",
+        }
+    }
+
+if not CLOUDINARY_PUBLICAO:  # pragma: no cover - guardião de arranque
+    raise ImproperlyConfigured(
+        "CLOUDINARY_PUBLICAO não pode ser falso em produção: o MEDIA_ROOT de "
+        "uma função serverless é efémero."
+    )
 
 X_FRAME_OPTIONS = "DENY"

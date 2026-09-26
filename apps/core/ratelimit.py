@@ -35,13 +35,24 @@ def check_rate_limit(
     limit: int = DEFAULT_LIMIT,
     window: int = DEFAULT_WINDOW_SECONDS,
 ) -> RateLimitResult:
-    """Conta pedidos no intervalo e informa se o limite já foi atingido."""
+    """Conta pedidos no intervalo e informa se o limite já foi atingido.
+
+    A contagem é um `incr` e não um `get` seguido de um `set`. A leitura e a
+    escrita separadas deixavam dois pedidos simultâneos ler o mesmo número e
+    gravar o mesmo número a seguir, e a segunda contagem desaparecia: em
+    produção, onde as funções da Vercel correm em paralelo, o limite aceitaria
+    o dobro do que diz. `incr` é um `UPDATE` de cada backend, e a excepção de
+    chave em falta é o que o transformava no primeiro incremento.
+    """
     key = f"ratelimit:{scope}:{client_ip(request)}"
-    attempts = cache.get(key, 0)
-    if attempts >= limit:
+    try:
+        attempts = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, window)
+        attempts = 1
+    if attempts > limit:
         return RateLimitResult(allowed=False, remaining=0, retry_after=window)
-    cache.set(key, attempts + 1, window)
-    return RateLimitResult(allowed=True, remaining=limit - attempts - 1, retry_after=0)
+    return RateLimitResult(allowed=True, remaining=limit - attempts, retry_after=0)
 
 
 def reset_rate_limit(request: HttpRequest, *, scope: str) -> None:

@@ -1,7 +1,9 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% load echilo_format %}
 
 {% block title %}{{ property.reference }} — curadoria{% endblock %}
+
+{% block body_attrs %} data-municipality-options="{{ municipality_options_url }}"{% endblock %}
 
 {% block content %}
 <section class="section">
@@ -51,6 +53,36 @@
         {% else %}
           <p>Escritura e documento de identificação verificados. O imóvel pode ser publicado.</p>
         {% endif %}
+
+        {% if documents %}
+          <ul class="doc-list">
+            {% for documento in documents %}
+              <li class="doc-list__item">
+                <span class="doc-list__name">{{ documento.get_document_type_display }}</span>
+                <span class="doc-list__status">{{ documento.get_status_display }}</span>
+                {% if documento.file %}
+                  {% if can_validate_documents %}
+                    <a class="doc-list__link" href="{{ documento.file.url }}" target="_blank" rel="noopener">
+                      Abrir
+                      <span class="sr">{{ documento.get_document_type_display }} de {{ property.reference }}</span>
+                    </a>
+                  {% else %}
+                    <span class="doc-list__locked">Só um agente pode abrir</span>
+                  {% endif %}
+                {% else %}
+                  <span class="doc-list__locked">Sem ficheiro</span>
+                {% endif %}
+                {% if documento.rejection_reason %}
+                  <span class="doc-list__reason">{{ documento.rejection_reason }}</span>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+          <p class="doc-list__note">
+            Cada abertura fica registada com o agente e a data, conforme exige o
+            §6. O link é temporário e só funciona para quem o recebeu.
+          </p>
+        {% endif %}
       </article>
     </div>
 
@@ -80,6 +112,7 @@
             {% include "partials/form_field.html" with field=form.province_ref %}
             {% include "partials/form_field.html" with field=form.municipality %}
           </div>
+          {% include "partials/municipality_datalist.html" %}
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.latitude %}
             {% include "partials/form_field.html" with field=form.longitude %}

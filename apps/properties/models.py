@@ -11,6 +11,7 @@ from django.db import models
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.core.storage import storage_documentacao
 from apps.core.validators import validate_angolan_phone
 
 from .reference import ANGOLA_PROVINCES, municipalities_for
@@ -375,7 +376,16 @@ class PropertyDocument(models.Model):
         max_length=20,
         choices=DocumentType.choices,
     )
-    file = models.FileField("ficheiro", upload_to="documents/%Y/%m/", blank=True)
+    # O §6 proíbe a documentação legal em URL público, por isso este campo não
+    # usa o `default`: usa o backend que exige perfil `AGENT` ou `ADMIN` e emite
+    # um link temporário. A Storage do campo é avaliada no arranque, e é por isso
+    # que o backend vem de uma setting calculada e não de uma constante.
+    file = models.FileField(
+        "ficheiro",
+        upload_to="documents/%Y/%m/",
+        blank=True,
+        storage=storage_documentacao,
+    )
     status = models.CharField(
         "verificação",
         max_length=10,
@@ -436,6 +446,52 @@ class PropertyStatusEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.property.reference}: {self.from_status} → {self.to_status}"
+
+
+class DocumentAccessLog(models.Model):
+    """Registo de cada abertura de documento legal, exigido por §6.
+
+    A curadoria marca o documento como verificado e isso já fica no histórico do
+    imóvel. O que não fica — e o §6 pede explicitamente — é quem o abriu. São
+    duas perguntas diferentes: uma responde "o que decidimos sobre o ficheiro" e
+    a outra responde "quem leu a escritura do proprietário", e é a segunda que
+    interessa quando há uma disputa sobre um título.
+
+    O IP e o navegador ficam os dois guardados, porque nenhum dos dois sozinho
+    prova nada e juntos dizem se foi a pessoa da equipa a abrir a escritura ou
+    um link que saiu da plataforma. O IP de trás de um proxy é o do proxy, e por
+    isso a coluna é um endereço de rede validado e não texto livre: um `X-Forwarded-For`
+    escrito à mão tem de ser recusado.
+
+    O registo não se apaga com o documento. Com `CASCADE`, apagar um ficheiro
+    levava consigo a prova de quem o tinha lido, e o ficheiro é precisamente o
+    que se pode querer apagar depois de um imóvel sair do catálogo: o `PROTECT`
+    obriga a uma decisão explícita, e a decisão fica escrita.
+    """
+
+    document = models.ForeignKey(
+        PropertyDocument,
+        verbose_name="documento",
+        on_delete=models.PROTECT,
+        related_name="access_logs",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="aberto por",
+        on_delete=models.PROTECT,
+        related_name="document_access_logs",
+    )
+    ip_address = models.GenericIPAddressField("endereço de origem", null=True, blank=True)
+    user_agent = models.CharField("navegador", max_length=200, blank=True)
+    created_at = models.DateTimeField("aberto em", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "acesso a documento"
+        verbose_name_plural = "acessos a documentos"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.actor}: {self.document}"
 
 
 class PropertySubmission(models.Model):

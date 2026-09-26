@@ -106,8 +106,8 @@ class GroqProvider:
 
         self._client = Groq(
             api_key=settings.ECHILO_AI_API_KEY,
-            max_retries=2,
-            timeout=25.0,
+            max_retries=settings.ECHILO_AI_MAX_RETRIES,
+            timeout=settings.ECHILO_AI_TIMEOUT,
         )
         self.model = settings.ECHILO_AI_MODEL
 

@@ -337,6 +337,76 @@
   flex: none;
 }
 
+/* A lista de documentos precisa dos seus próprios nomes em vez dos de `.level`.
+
+   `.level ul` e `.level li` são mais específicos do que `.doc-list` e
+   `.doc-list__item`, e a lista de documentos vive dentro de `.level`. Sem o
+   prefixo, herdava a grelha e o `align-items` do checklist de triagem, e os
+   estados ficavam desalinhados dos nomes. Um selector que não vence o do lado
+   não está a descrever o que pensa estar.
+*/
+.level .doc-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  color: var(--tx);
+  font-size: 13.5px;
+}
+
+.level .doc-list__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 11px 13px;
+  background: var(--s2);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-sm);
+}
+
+.doc-list__name {
+  color: var(--tx);
+  font-weight: 600;
+}
+
+.doc-list__status {
+  color: var(--mu);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  margin-right: auto;
+}
+
+.doc-list__link {
+  color: var(--gold);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.doc-list__link:hover,
+.doc-list__link:focus-visible {
+  border-bottom-color: var(--gold);
+}
+
+.doc-list__locked {
+  color: var(--mu2);
+  font-size: 12.5px;
+  font-style: italic;
+}
+
+.doc-list__reason {
+  flex-basis: 100%;
+  color: var(--no);
+  font-size: 12.5px;
+}
+
+.doc-list__note {
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--mu2);
+}
+
 /* Chat do assistente */
 .chat {
   display: flex;
@@ -625,6 +695,47 @@
   border: 1px solid var(--line2);
   border-radius: var(--r-md);
   overflow: hidden;
+  position: relative;
+}
+
+/* O botão vive sobre o mapa, no canto de cima à direita, ao lado do `leaflet.draw`
+   que fica em cima à esquerda. Fica por cima das camadas do Leaflet — as panes
+   chegam a 800 e os popups a 700, e um botão a 1000 passa à frente de todos —
+   e o contentor tem `overflow: hidden`, portanto não há como sair do mapa.
+
+   Sem `position` própria o Leaflet tratava isto como uma pane e o botão ficava
+   no canto errado quando o mapa mudava de tamanho. */
+.area-search__centrar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  padding: 8px 14px;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-sm);
+  background: var(--s2);
+  color: var(--tx);
+  font: 600 12.5px/1 var(--sans);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.area-search__centrar:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+/* À espera da permissão, o botão está ocupado. Um botão que não reage parece
+   partido, e o `cursor` de espera diz que há algo em curso. */
+.area-search__centrar[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.65;
+}
+
+.area-search__centrar:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
 }
 
 .area-search__panel {
@@ -725,8 +836,13 @@
   background: var(--gold);
 }
 
+/* A cor que distingue a finalidade é a do pino, e a legenda diz qual é. A
+   variável chama-se `--ok`: `var(--success)` não existe em lado nenhum, e uma
+   custom property por resolver não dá erro — a declaração é inválida no
+   cálculo do valor e o ponto fica transparente. Os pinos verdes no mapa e um
+   ponto invisível na legenda são a mesma promessa a half-cumprir. */
 .area-search__dot--sale {
-  background: var(--success);
+  background: var(--ok);
 }
 
 /* O popup do Leaflet nasce branco, e branco sobre imagem aérea escura é um
@@ -872,6 +988,29 @@
 .area-search__error a {
   color: var(--gold);
   text-decoration: underline;
+  }
+
+/* A recusa da permissão é uma resposta, não um erro do mapa: a caixa é mais
+   discreta, e muda de cor quando a resposta é "não". O texto diz sempre o que
+   fazer a seguir, e o desenho do círculo é sempre a saída. */
+.area-search__local {
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--mu);
+}
+
+.area-search__local:empty {
+  display: none;
+}
+
+.area-search__local--erro {
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 91, 91, 0.45);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+  background: rgba(239, 91, 91, 0.12);
+  color: #f3b1b1;
 }
 
 /* A área activa continua visível depois de cada troca do HTMX, com saída para

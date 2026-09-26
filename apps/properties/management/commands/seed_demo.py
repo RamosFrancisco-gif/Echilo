@@ -7,10 +7,12 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management.base import BaseCommand
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from apps.core.images import solid_colour_jpeg
+from apps.core.management.utils import exige_desenvolvimento
 from apps.properties.models import (
     OwnerProfile,
     Property,
@@ -148,6 +150,7 @@ class Command(BaseCommand):
     @transaction.atomic
     def handle(self, *args: object, **options: object) -> None:
         """Cria os dados e imprime um resumo do que ficou no catálogo."""
+        exige_desenvolvimento(debug=settings.DEBUG, comando="seed_demo")
         if options["flush"]:
             self._flush()
 

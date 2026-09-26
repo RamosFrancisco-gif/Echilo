@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from django.utils.html import format_html
 
 from .models import (
+    DocumentAccessLog,
     OwnerProfile,
     Property,
     PropertyDocument,
@@ -207,6 +208,33 @@ class PropertyStatusEventAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request: admin.ModelRequest, obj: object = None) -> bool:
         """Impede a edição do histórico já registado."""
+        return False
+
+
+@admin.register(DocumentAccessLog)
+class DocumentAccessLogAdmin(admin.ModelAdmin):
+    """Quem abriu a documentação legal, e quando (§6).
+
+    Só de leitura. Um registo de auditoria que se possa apagar não é um registo
+    de auditoria, e a razão de o registo existir é precisamente o dia em que
+    alguém precisa de provar que leu a escritura e que não a leu.
+    """
+
+    list_display = ("document", "actor", "ip_address", "created_at")
+    list_filter = ("created_at", "actor__role")
+    search_fields = ("document__property__reference", "actor__email", "ip_address")
+    readonly_fields = [field.name for field in DocumentAccessLog._meta.fields]
+
+    def has_add_permission(self, request: admin.ModelRequest) -> bool:
+        """Um acesso é o que a aplicação registou, não o que alguém escreve à mão."""
+        return False
+
+    def has_change_permission(self, request: admin.ModelRequest, obj: object = None) -> bool:
+        """O registo é imutável depois de escrito."""
+        return False
+
+    def has_delete_permission(self, request: admin.ModelRequest, obj: object = None) -> bool:
+        """Apagar o registo de uma leitura é o que o registo existe para impedir."""
         return False
 
 

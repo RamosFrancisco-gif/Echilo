@@ -136,20 +136,70 @@ TIME_ZONE = "Africa/Luanda"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "static/"
+# Os ficheiros vão para a Cloudinary quando há credencial, e para o disco quando
+# não há. A escolha é feita pela variável e não pelo ambiente: um `.env` de
+# desenvolvimento sem `CLOUDINARY_URL` tem de continuar a funcionar sozinho.
+CLOUDINARY_URL = env("CLOUDINARY_URL")
+
+# Só o que é público pode ser uma foto do imóvel: as imagens aparecem no catálogo
+# sem sessão. Os documentos legais não entram aqui e nunca podem entrar.
+CLOUDINARY_PUBLICAO = env_bool("CLOUDINARY_PUBLICAO", default=bool(CLOUDINARY_URL))
+
+# O `PropertyDocument.file` é o único campo do projecto que não pode ser público
+# (§6). Django não tem dois backends "default", por isso o campo declara o seu.
+MEDIA_DOCUMENTACAO_BACKEND = (
+    "apps.core.storage.CloudinaryDocumentStorage"
+    if CLOUDINARY_PUBLICAO
+    else "django.core.files.storage.FileSystemStorage"
+)
+
+STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STORAGES = {
-    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
-        if not DEBUG
-        else "django.contrib.staticfiles.storage.StaticFilesStorage"
-    },
-}
 
-MEDIA_URL = "media/"
+MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+
+def storages(*, manifest: bool, cloudinary: bool) -> dict[str, dict[str, str]]:
+    """Monta o `STORAGES` a partir de duas decisões explícitas.
+
+    É uma função e não um bloco no topo do ficheiro porque `production.py` muda
+    `DEBUG` para `False` **depois** de este módulo ser importado. Um `STORAGES`
+    decidido aqui com o `DEBUG` do ambiente lia `True` da variável de
+    desenvolvimento, e a produção ficava com `StaticFilesStorage`: sem manifesto,
+    o `whitenoise` não sabe que ficheiro responder a cada nome com hash, e o
+    sítio aparecia sem CSS — com 200 e sem um erro.
+
+    `manifest` e `cloudinary` são parâmetros, e não letidas de `DEBUG`, para que
+    cada ambiente diga o que é em vez de o herdado. `production.py` e
+    `development.py` respondem, e a resposta fica escrita à vista.
+    """
+    return {
+        "default": {
+            "BACKEND": (
+                "apps.core.storage.CloudinaryImageStorage"
+                if cloudinary
+                else "django.core.files.storage.FileSystemStorage"
+            )
+        },
+        "staticfiles": {
+            "BACKEND": (
+                "whitenoise.storage.CompressedManifestStaticFilesStorage"
+                if manifest
+                else "django.contrib.staticfiles.storage.StaticFilesStorage"
+            )
+        },
+    }
+
+
+STORAGES = storages(manifest=not DEBUG, cloudinary=CLOUDINARY_PUBLICAO)
+
+# O §6 limita o que entra. A Cloudinary volta a validar os formatos, mas validar
+# duas vezes não é redundância: uma das validações está a oito saltos do
+# ficheiro e a outra no próprio campo.
+DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024)
+FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -177,6 +227,20 @@ SERVER_EMAIL = DEFAULT_FROM_EMAIL
 ECHILO_AI_API_KEY = env("ECHILO_AI_API_KEY")
 ECHILO_AI_MODEL = env("ECHILO_AI_MODEL", "openai/gpt-oss-120b")
 ECHILO_AI_ENABLED = env_bool("ECHILO_AI_ENABLED", default=True)
+
+# O plano Hobby da Vercel corta a função aos 10 s, e `vercel.json` diz 10 para
+# que o limite seja um número nosso e não um que muda com a Vercel.
+#
+# Uma chamada à Groq com 25 s de timeout e duas retentativas podia passar dos
+# 60 s: o utilizador escrevia a pergunta e, um minuto depois, recebia um 504 sem
+# explicação nenhuma. Pior ainda, uma retentativa com timeout de 8 s já estoura
+# os 10 s, e quem corta é a plataforma — que não sabe dizer o que aconteceu.
+#
+# Por isso: uma tentativa só, com timeout abaixo do limite. Ou a resposta vem,
+# ou falhamos nós, com a mensagem que o assistente já sabe escrever. Falhar
+# depressa e dizer porquê é melhor do que falhar tarde e não dizer nada.
+ECHILO_AI_TIMEOUT = env_number("ECHILO_AI_TIMEOUT", 6.0)
+ECHILO_AI_MAX_RETRIES = env_int("ECHILO_AI_MAX_RETRIES", 0)
 ECHILO_WHATSAPP_NUMBER = env("ECHILO_WHATSAPP_NUMBER")
 MANAGER_EMAILS = env_list("MANAGER_EMAILS")
 SITE_URL = env("SITE_URL", "http://127.0.0.1:8000")

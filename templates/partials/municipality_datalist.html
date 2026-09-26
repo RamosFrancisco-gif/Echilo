@@ -1,0 +1,13 @@
+{% comment %}
+  Sugestões de município para o campo que aceita texto livre. O `id` é o mesmo
+  nos dois formulários porque nunca estão na mesma página: o `list` do campo
+  aponta para aqui e o navegador casa as opções à medida que se escreve.
+
+  A lista é a da província que o formulário já tem em mãos, e o JavaScript
+  reconstrói-a quando a província muda. Sem JavaScript, mudar a província e
+  submeter devolve a página com a lista certa: o formulário é que fica
+  desatualizado até alguém submeter, e não partido.
+{% endcomment %}
+<datalist id="municipality-options">
+  {% for municipio in form.municipality_options %}<option value="{{ municipio }}"></option>{% endfor %}
+</datalist>

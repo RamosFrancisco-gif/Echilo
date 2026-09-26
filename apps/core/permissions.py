@@ -23,9 +23,14 @@ def require_team_member(request: HttpRequest) -> None:
 
 
 def require_document_access(request: HttpRequest) -> None:
-    """Restringe a documentação legal a AGENT e ADMIN conforme §6 do steering."""
-    if not is_team_member(request.user) or request.user.role not in {
-        User.Role.AGENT,
-        User.Role.ADMIN,
-    }:
+    """Restringe a documentação legal a quem pode validar, conforme §6.
+
+    A regra está em `User.can_validate` e não escrita aqui. Repetir o conjunto de
+    perfis dava dois sítios a responder à pergunta "quem abre uma escritura", e
+    divergir entre eles não dava erro: o `is_staff` do utilizador continua a ser
+    verdadeiro para quem já tinha acesso, e o documento sai para a pessoa errada
+    sem ninguém notar. A propriedade no modelo é a que também decide o `is_staff`,
+    e por isso o admin e esta rota não podem discordar.
+    """
+    if not getattr(request.user, "can_validate", False):
         raise PermissionDenied("A documentação legal exige permissão de agente.")

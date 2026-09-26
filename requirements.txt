@@ -1,6 +1,8 @@
 Django>=4.2,<5.1
-mysqlclient>=2.2,<3
+PyMySQL>=1.1,<2
+cryptography>=42.0
 Pillow>=10.0
 python-dotenv>=1.0
 whitenoise>=6.5
 groq>=1.0
+cloudinary>=1.40

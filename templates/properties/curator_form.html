@@ -1,7 +1,9 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% load echilo_format %}
 
 {% block title %}{{ form_title }} — painel interno{% endblock %}
+
+{% block body_attrs %} data-municipality-options="{{ municipality_options_url }}"{% endblock %}
 
 {% block content %}
 <section class="section">
@@ -63,6 +65,7 @@
             {% include "partials/form_field.html" with field=form.province_ref %}
             {% include "partials/form_field.html" with field=form.municipality %}
           </div>
+          {% include "partials/municipality_datalist.html" %}
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.locality %}
             {% include "partials/form_field.html" with field=form.address_hint %}

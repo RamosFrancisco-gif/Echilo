@@ -273,6 +273,50 @@ O mapa é uma melhoria progressiva, e o formulário não depende dele:
   trata do resto — não há uma segunda via de pedido.
 - Sem JavaScript, ou sem Leaflet, a secção do mapa desaparece e a URL continua a
   filtrar.
+- **As sugestões de município seguem a província, e é o servidor que as
+  escreve.** `PropertyQueryService.municipality_suggestions()` devolve a união
+  dos municípios da lista de referência com as áreas que têm imóveis
+  publicados, porque o campo aceita localidade e `municipality` não é a única
+  coluna que a pesquisa lê. A lista de sugestões entra no `<datalist>` do
+  servidor; o JavaScript troca-a por um `fetch` a `properties:municipalities`
+  quando a província muda. **Não se escreve a lista inteira no HTML**: cento e
+  setenta e um nomes no código-fonte é oferecer todos, que é o contrário
+  do que o filtro promete, e ainda pesa cada página do catálogo.
+- **O campo continua a ser texto livre.** Um `<select>` fechava a pesquisa a
+  município e perdia a localidade, que é metade do catálogo. O que muda é a
+  lista de sugestões.
+- **O formulário de curadoria usa o mesmo caminho.** O `datalist` vive em
+  `partials/municipality_datalist.html` e as duas páginas internas apontam para
+  ele. Antes de ele existir, `list="municipality-options"` apontava para um `id`
+  que não estava em lado nenhum, e o campo da equipa ficava sem sugestão
+  nenhuma. Um atributo que aponta para nada não dá erro: o campo continua a
+  aceitar texto e a equipa escreve o município à mão, sem perceber que as opções
+  não estão lá.
+- **A form da curadoria recebe a província por três sítos, e o `initial` é um
+  deles.** `PropertyCuratorForm.__init__()` lê `self.data`, depois
+  `self.initial`, e só depois a instância. A ficha interna passa os dados do
+  imóvel em `initial` e não como instância, e `self.instance` é ali um
+  `Property()` vazio: ler só a instância dava província vazia, que faz
+  `municipalities_for("")` devolver a união das 21 listas. O resultado era a ficha
+  de um imóvel de Benguela a oferecer os cento e setenta e um nomes, e a equipa
+  a concluir que o campo não era scoped. Um `<datalist>` com conteúdo a mais não
+  dá erro nenhum — dá a lista errada, e a lista errada parece uma lista.
+- **Todos os selectores de província oferecem as 21, e não só as que têm
+  imóveis.** A home, o catálogo, a curadoria e o registo de conta são a mesma
+  pergunta com quatro formulários, e respostas diferentes entre eles é uma
+  resposta que muda conforme se entra pela porta da frente ou por trás. A
+  home chegou a listar só as províncias com imóveis publicados, e quem não
+  chegasse ao catálogo nunca via Icolo e Bengo existir. Uma província sem
+  imóveis dá um resultado vazio, que é honesto; uma província que o produto
+  não menciona é uma que não existe para quem lê.
+- **Um teste de `<select>` diz de que campo está a falar.** Medir a página
+  inteira mede o formulário ao lado: o registo tem três `select` e o do tipo de
+  documento escreve `BI` e `PASSPORT`, que passam por províncias. É o que
+  `select_options(html, field_id)` evita, e é o mesmo cuidado que o `datalist`
+  exige — medir o alvo, não a página.
+- **Sem JavaScript, mudar a província e submeter devolve a página com a lista
+  certa.** O formulário é que fica desatualizado até alguém submeter, e isso é
+  diferente de estar partido.
 - **O que o mapa está a mostrar é escrito pelo servidor.** O texto com o número
   de imóveis, e a legenda, saem do template: quem abre a página sem JavaScript
   vê a mesma explicação, e quem vê um mapa vazio sabe se falta o mapa ou o
@@ -282,6 +326,39 @@ O mapa é uma melhoria progressiva, e o formulário não depende dele:
   funcionava, mas lia-se como um quadrado vazio, e quem não o percebeu partiu do
   princípio de que o mapa estava partido. A barra do `leaflet.draw` fica só com
   o editar e o apagar.
+- **Centrar usa a localização de quem pergunta, e diz quando não a consegue
+  ler.** O botão vive dentro de `#area-map`, para ficar debaixo dos olhos de quem
+  está a olhar para o mapa. No sucesso: `map.setView`, um ponto azul na
+  `localGroup` — nem dourado nem verde, porque nenhum dos dois é o dono do
+  imóvel — e `applyArea()` com `origem: 'utilizador'`, que é o caminho já
+  existente, não um segundo pedido.
+- **A recusa da permissão é o caso comum, não a excepção.** Cada código de
+  `getCurrentPosition` diz o que aconteceu e **volta sempre ao desenho do
+  círculo**, que não depende de ninguém. Um botão que falha em silêncio parece um
+  botão que não funciona. E a geolocalização só existe em contexto seguro:
+  servida por HTTP simples, `navigator.geolocation` nem existe, e a resposta tem
+  de dizer isso em vez de ficar muda.
+- **A mensagem da geolocalização não é a dos tiles, e a cura é outra.** Um 403 do
+  fornecedor a apagar a recusa da permissão mandava o utilizador seguir a pista
+  errada, por isso são caixas separadas. A dos tiles é `alert`; a da localização é
+  `status`, porque dois alertas ao mesmo tempo fazem o leitor de ecrã ler a
+  mensagem errada.
+- **O resumo diz de onde veio o centro.** "Raio de 2 km em torno de -8,8390,
+  13,2894" não diz a ninguém que aquilo era ele. Com a origem GPS escreve "da sua
+  localização", e um círculo que não seja de lá desfaz a mensagem, porque ela
+  deixaria de ser verdade dois segundos depois. O chip que o servidor redesenha
+  depois do HTMX continua a escrever coordenadas: uma URL partilhada não deve
+  dizer a quem a abre que a área era a sua.
+- **O raio tem duas autoridades, e são pessoas diferentes.** Quem arrasta o
+  círculo com a ferramenta do `leaflet.draw` diz o raio pela geometria; quem
+  escreve no campo diz por palavras. `redrawFromLayer()` recebe o raio em
+  argumento e usa o da camada só quando não lhe deram nenhum.
+- **`map.on(tipo, fn)` passa o evento a `fn`, e um evento não é um raio.**
+  Registrar `redrawFromLayer` directamente no `EDITED` mandava o evento do
+  Leaflet para dentro de `clampRadius`: `Number(evento)` dá `NaN`, a função
+  devolve o mínimo, e arrastar um círculo encolhia-o para 100 m sem um único
+  erro. A chamada vai dentro de uma função que não recebe argumentos, e
+  `test_o_ouvinte_do_circulo_nao_recebe_o_evento_como_raio` trava isso.
 - O popup de cada pino escapa tudo o que a equipa escreveu no imóvel. O título é
   texto livre: sem escape, uma aspa ou um `<` fecham o atributo ou injectam HTML.
 - Tem de existir operação por teclado: focar o mapa, mover com as setas, escolher
@@ -316,6 +393,60 @@ O mapa é uma melhoria progressiva, e o formulário não depende dele:
 - O `{x}` e o `{y}` não são intercambiáveis entre fornecedores: o Leaflet escreve
   `{z}/{x}/{y}` e o Esri serve `{z}/{y}/{x}`. A troca manda o mapa para o lado
   errado do mundo sem dar erro nenhum.
+- **O mapa diz onde está.** Sob os pinos desenham-se as divisões de Angola, e o
+  mapa diz em que província e município está cada área. As camadas são
+  vendorizadas, com a fonte e a licença escritas no ficheiro e no mapa:
+  `static/vendor/geo/angola-provincias.json` e `angola-municipios.json`, do
+  geoBoundaries `gbOpen` (CC BY 4.0), geradas por
+  `python manage.py build_admin_boundaries` e verificadas com `--check`.
+- **A geometria e o ponto do rótulo não seguem a mesma ordem, e essa é a
+  armadilha.** `geometry.coordinates` vai em `[lon, lat]`, que é o GeoJSON e o
+  que o `L.geoJSON` lê ao desenhar. `properties.ponto` vai em `[lat, lon]`,
+  porque é o `L.circleMarker` que o recebe. Trocar um dos dois não dá erro: o
+  mapa desenha Angola no Atlântico a oeste, ou escreve os nomes no mar, e o DOM
+  continua cheio de `path`. O comando converte em `geometria()` e desfaz em
+  `aneis_de()`; o JavaScript faz o mesmo em `dentroDe()`.
+- **Um nome é um ponto, não o centro da camada.** O centro da caixa envolvente
+  de uma divisão recortada cai fora dela, e o mapa escreve o nome ao lado.
+  `properties.ponto` é calculado pelo comando com o ponto mais distante da
+  margem, e um teste exige que caia dentro do próprio contorno — nas duas
+  camadas.
+- **A província vem do município.** As camadas ADM1 e ADM2 da fonte não
+  coincidem: o município de Luanda cobre o centro e a baía, e o contorno
+  provincial tem esse recorte a menos. Perguntar só à província dava "fora dos
+  contornos" com o círculo no meio de Luanda. A província vem do município,
+  com o ADM1 como recurso.
+- **A lista do projecto tem vinte e uma entradas e a fonte desenha dezoito.**
+  Não são a mesma coisa e nenhuma cede: `ANGOLA_PROVINCES` e
+  `MUNICIPALITIES_BY_PROVINCE` são o que o filtro oferece, e
+  `PROVINCE_BOUNDARY_CODES` é o que a fonte tem. Onde não há correspondence há
+  uma entrada a menos, não um contorno inventado — `Icolo e Bengo` e `Moxico
+  Leste` aparecem nos filtros e não se desenham. Onde a lista dá dois nomes a uma
+  divisão, como `Cuando` e `Cubango`, os dois apontam para o mesmo `shapeName`
+  e a geometria é desenhada uma vez. `provinces_without_boundary()` é a lista
+  dessa diferença, e o comando imprime-a em vez de falhar: a igualdade entre as
+  duas listas é a excepção, e quando acontecer é porque a fonte mudou. O número
+  de províncias não é escrito em código nem na interface — o mapa diz o que sabe,
+  que é se o ponto caiu dentro de um contorno.
+- **Os municípios não se desenham longe, e a carga é o que torna o mapa
+  possível.** As províncias vão no primeiro carregamento; os municípios só são
+  pedidos quando o mapa atinge `ZOOM_MUNICIPIOS`, ou quando o utilizador desenha
+  um círculo. O catálogo abre enquadrado nos pinos, tipicamente numa cidade e
+  acima do limiar, e nesse caso a camada entra logo; numa vista de país, o mapa
+  nunca pede os 157 municípios. 157 nomes a zoom 9 não se leem, e 157 linhas que
+  não se apagam enchem Angola de arame, por isso abaixo do limiar somem as linhas
+  **e** os rótulos, ao mesmo tempo.
+- **O que a fonte não dá, não se inventa.** A camada municipal não cobre trinta
+  e tal municípios da lista — entre eles `Caxito`, `N'dalatando`, `Ondjiva` e
+  `Dundo` — e não tem contorno provincial para `Icolo e Bengo` nem para `Moxico
+  Leste`. Ficam sem contorno e sem nome; o comando imprime a lista de cada vez
+  que corre. O mapa não desenha bairro: `Property.locality` é texto, e não há
+  fonte administrativa fiável para lhe prometer um limite.
+- A simplificação é diferente nas duas camadas — 223 m nos municípios, 1,1 km nas
+  províncias — e a atribuição de município a província é mais fina (5,5 m), porque
+  aí um erro põe o município na província errada. Um anel que simplifique para
+  menos de quatro pontos fica com os vértices que a fonte deu: um município que
+  desaparece é pior do que um município desenhado com mais pontos.
 
 ### 2.13 Números que atravessam a interface
 
@@ -531,6 +662,78 @@ Directrizes visuais herdadas dos protótipos existentes:
 | `ECHILO_WHATSAPP_NUMBER` | Número de WhatsApp do contacto directo. |
 | `MANAGER_EMAILS` | E-mails com acesso ao painel interno. |
 | `SITE_URL` | URL pública, usada nos e-mails de recuperação. |
+| `DJANGO_SETTINGS_MODULE` | `config.settings.production` na Vercel. Sem isto o `collectstatic` do build corre em modo de desenvolvimento. |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | Origens do formulário, com esquema. O `ALLOWED_HOSTS` incluir `.vercel.app` não chega: o `Origin` do preview é recusado sem esta lista, e o erro é um 403 num formulário. |
+| `DJANGO_CONN_MAX_AGE` | Segundos de espera de uma ligação MySQL. `0` na Vercel. |
+| `DJANGO_CACHE_BD` | `true` liga o cache na base de dados. |
+| `DJANGO_CACHE_LOCATION` | Tabela do cache. Criada por `apps/core/migrations/0001`. |
+| `DJANGO_CACHE_TIMEOUT` | Segundos de um item de cache. Vai dentro de `OPTIONS`. |
+| `DJANGO_SECURE_SSL_REDIRECT` | `true` em produção. |
+| `CLOUDINARY_URL` | `cloudinary://<api_key>:<api_secret>@<cloud_name>`. Obrigatória em produção. |
+| `CLOUDINARY_PUBLICAO` | `true` em produção. `false` deixa o `MEDIA_ROOT` de uma função, que é efémero. |
+| `DATA_UPLOAD_MAX_MEMORY_SIZE` | Bytes. Predefinido: 5 MiB. |
+| `FILE_UPLOAD_MAX_MEMORY_SIZE` | Bytes. Predefinido: 5 MiB. |
+| `ECHILO_AI_TIMEOUT` | Segundos por tentativa ao Groq. Predefinido: `6.0`. |
+| `ECHILO_AI_MAX_RETRIES` | Tentativas. Predefinido: `0`. |
+
+---
+
+## 7.1 Deploy
+
+O alvo é a Vercel, com a aplicação a correr como função serverless. Isto não é
+um detalhe de infraestrutura: muda o que é seguro guardar em disco, e quase
+tudo aqui vem dessa mudança.
+
+**A função vive, morre e não volta.** Consequências que não são óbvias:
+
+- `MEDIA_ROOT` é efémero. Um ficheiro escrito por uma invocação desaparece
+  antes da seguinte, e o catálogo fica sem fotografias sem nenhum erro.
+  Todo o media vai para a Cloudinary, e produção recusa arrancar sem
+  `CLOUDINARY_URL` em vez de o descobrir com o cliente à frente.
+- `CONN_MAX_AGE = 0`. Uma ligação MySQL mantida para reaproveitar ocupa uma
+  das poucas ligações do plano durante quase mais um minuto do que precisava.
+- O cache em memória é novo a cada invocação. O limitador de tentativas do §6
+  deixava de ser um limite, e o login passava a aceitar senhas erradas para
+  sempre sem dar erro. Por isso o cache é o da base de dados, e a tabela é
+  criada por migration.
+- Nada de estado entre invocações. A pesquisa por área (§2.12) vive no URL
+  exactamente por isto: o estado que a função não pode guardar fica onde o
+  browser o pode reenviar.
+
+**Ordem de deploy.** As migrations não correm no build — uma base de dados
+com migration a meio é pior do que uma base sem migration:
+
+1. `DJANGO_SETTINGS_MODULE=config.settings.production` nas variáveis da
+   Vercel, e as restantes também. O build faz `collectstatic --noinput` e nada
+   mais.
+2. `python manage.py migrate` contra a base de produção, **a partir de uma
+   máquina com as variáveis todas**, antes de promover o deploy novo.
+3. `python manage.py createcachetable` se a base já existia antes de
+   `core.0001`: a migration só cria a tabela quando o cache configurado é o da
+   base de dados, e uma base migrada em desenvolvimento tinha o cache local.
+4. `vercel --prod`.
+
+**O `collectstatic` do build tem de correr com as settings de produção.** O
+`base.py` é importado antes de o `production.py` fazer `DEBUG = False`, e um
+`STORAGES` decidido no `base` a partir do `DEBUG` do ambiente fica com
+`StaticFilesStorage`: sem manifesto o `whitenoise` não resolve os nomes com
+hash e a página aparece sem CSS, com 200 e sem nada na consola. Por isso
+`storages()` é uma função e cada ambiente responde por si.
+`apps.core.test_deploy.BuildEstaticoTests` corre o `collectstatic` a sério,
+porque um ficheiro em falta só falha no build.
+
+**O que já está em `media/` tem de ser transferido antes de mudar de backend.**
+Um `PropertyImage.image.name` que aponta para um caminho local continua a
+apontar para esse caminho depois de o backend ser a Cloudinary, e a imagem
+some do catálogo. A transferência lê o disco, sobe e reescreve o nome do
+campo, e tem de correr com o backend antigo activo — por isso antes do passo 2.
+
+**A documentação legal nunca é um URL público** (§6). Os documentos são
+entregas como `authenticated` e abertos por `PropertyDocumentView`, que exige
+`AGENT`/`ADMIN`, devolve um link assinado e não deixa o ficheiro em cache nem
+no cabeçalho de referência. O registo de quem abriu é `DocumentAccessLog`, não
+apagável e sem `CASCADE` para o documento: apagar o ficheiro não pode levar
+consigo a prova de quem o leu.
 
 ---
 

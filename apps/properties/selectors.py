@@ -17,6 +17,7 @@ from apps.core.geo import circle_bounding_box, haversine_metres
 from apps.core.validators import to_decimal_or_none, validate_center, validate_search_radius_m
 
 from .models import Property, PropertyImage
+from .reference import municipalities_for
 
 # Um mapa com milhares de pinos deixa de ser um mapa: o browser passa a desenhar
 # o mesmo círculo sobrepostas vezes. Acima do limite mostramos os mais recentes e
@@ -348,12 +349,32 @@ class PropertyQueryService:
         return images[0] if images else None
 
     @classmethod
-    def available_areas(cls) -> list[str]:
-        """Municípios com imóveis publicados, para alimentar os filtros da navegação."""
+    def available_areas(cls, province: str = "") -> list[str]:
+        """Municípios e localidades com imóveis publicados, para alimentar os filtros.
+
+        A província é um filtro, não uma condição: sem ela o resultado é o de
+        sempre, e é isso que o formulário mostra quando ninguém escolheu uma.
+        """
+        consulta = cls.base_queryset().exclude(municipality="")
+        if province:
+            consulta = consulta.filter(province_ref=province)
         return list(
-            cls.base_queryset()
-            .exclude(municipality="")
-            .values_list("municipality", flat=True)
-            .distinct()
-            .order_by("municipality")
+            consulta.values_list("municipality", flat=True).distinct().order_by("municipality")
+        )
+
+    @classmethod
+    def municipality_suggestions(cls, province: str = "") -> list[str]:
+        """O que o campo de município oferece, para a província escolhida.
+
+        São duas fontes e as duas são verdade: a lista de referência, para quem
+        filtra por uma província que ainda não tem imóveis, e as áreas que existem
+        no catálogo, porque o campo também aceita localidade e `municipality` não
+        é a única coluna que a pesquisa lê.
+
+        Vive aqui e não na view porque a vista e o endpoint que responde à mudança
+        de província têm de oferecer exactamente a mesma coisa; duas listas
+        parecidas divergem na segunda alteração do utilizador.
+        """
+        return sorted(
+            {*municipalities_for(province), *cls.available_areas(province)}
         )
