@@ -1,0 +1,55 @@
+﻿{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}{{ view_title }} — {{ property.title }} — Echilo{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--form">
+    <a class="auth__back" href="{% url 'properties:property_detail' property.reference %}">
+      <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+      Voltar ao imóvel
+    </a>
+
+    <div class="section__head section__head--stacked mt-16" data-reveal>
+      <span class="eyebrow">{{ property.title }}</span>
+      <h2>{{ view_title }}</h2>
+      <p>{{ view_subtitle }}</p>
+    </div>
+
+    <div class="sidebar-card" data-reveal="scale">
+      <p class="detail__price">{{ property.price|kwanza }}<small>{% if property.purpose == 'RENT' %}/mês{% endif %}</small></p>
+      <p class="text-muted t-sm mb-22">
+        {{ property.locality|default:property.municipality }}, {{ property.get_province_ref_display }} · {{ property.reference }}
+      </p>
+
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert--error" role="alert">
+            <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+            <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+          </div>
+        {% endif %}
+
+        <div class="grid-2">
+          {% include "partials/form_field.html" with field=form.visit_date %}
+          {% include "partials/form_field.html" with field=form.visit_time %}
+        </div>
+        {% include "partials/form_field.html" with field=form.notes %}
+
+        <button class="btn btn--primary btn--block btn--lg" type="submit">Pedir visita</button>
+      </form>
+    </div>
+
+    <p class="trust-note mt-20">
+      <svg class="i i--offset" aria-hidi--offset"><use href="#shield"/></svg>
+      <span>
+        Um agente do Echilo confirma a data e a hora por telefone ou WhatsApp. Só depois de
+        confirmada é que recebe a morada exacta do imóvel.
+      </span>
+    </p>
+  </div>
+</section>
+{% endblock %}

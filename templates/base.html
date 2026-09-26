@@ -1,0 +1,46 @@
+{% load static %}<!DOCTYPE html>
+<html lang="pt-AO">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}Echilo — imóveis curados em Angola{% endblock %}</title>
+  <meta name="description" content="{% block description %}O Echilo liga clientes a proprietários através de uma equipa que valida cada imóvel antes de o publicar. Arrendar, comprar e terrenos em Angola.{% endblock %}">
+  <meta name="theme-color" content="#0c0906">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="icon" href="{% static 'img/favicon.svg' %}" type="image/svg+xml">
+<link rel="stylesheet" href="{% static 'css/echilo.css' %}">
+<link rel="stylesheet" href="{% static 'css/pages.css' %}">
+<script src="{% static 'vendor/htmx/1.9.12/htmx.min.js' %}" defer></script>
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <a class="skip-link" href="#conteudo">Saltar para o conteúdo</a>
+
+  {% include "partials/icons.html" %}
+
+  {% include "partials/nav.html" %}
+
+  <main id="conteudo">
+    {% if messages %}
+      <div class="wrap pt-20">
+        {% for message in messages %}
+          <div class="alert alert--{{ message.tags|default:'info' }}" role="status">
+            <svg class="i" aria-hidden="true"><use href="#{% if message.tags == 'error' %}alert{% elif message.tags == 'success' %}check{% else %}info{% endif %}"/></svg>
+            <span>{{ message }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  {% include "partials/footer.html" %}
+
+  <script src="{% static 'js/echilo.js' %}" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

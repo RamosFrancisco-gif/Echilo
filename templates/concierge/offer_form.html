@@ -1,0 +1,52 @@
+﻿{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}{{ view_title }} — {{ property.title }} — Echilo{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--form">
+    <a class="auth__back" href="{% url 'properties:property_detail' property.reference %}">
+      <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+      Voltar ao imóvel
+    </a>
+
+    <div class="section__head section__head--stacked mt-16" data-reveal>
+      <span class="eyebrow">{{ property.title }}</span>
+      <h2>{{ view_title }}</h2>
+      <p>{{ view_subtitle }}</p>
+    </div>
+
+    <div class="sidebar-card" data-reveal="scale">
+      <p class="detail__price">{{ property.price|kwanza }}</p>
+      <p class="text-muted t-sm mb-22">
+        Preço pedido pelo proprietário · {{ property.municipality }}, {{ property.get_province_ref_display }}
+      </p>
+
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert--error" role="alert">
+            <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+            <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+          </div>
+        {% endif %}
+
+        {% include "partials/form_field.html" with field=form.amount %}
+        {% include "partials/form_field.html" with field=form.message %}
+
+        <button class="btn btn--primary btn--block btn--lg" type="submit">Submeter proposta</button>
+      </form>
+    </div>
+
+    <p class="trust-note mt-20">
+      <svg class="i i--offset" aria-hidi--offset"><use href="#info"/></svg>
+      <span>
+        A proposta é enviada directamente à equipa do Echilo. Não é uma transacção automática:
+        um agente analisa e responde, podendo apresentar contraproposta.
+      </span>
+    </p>
+  </div>
+</section>
+{% endblock %}

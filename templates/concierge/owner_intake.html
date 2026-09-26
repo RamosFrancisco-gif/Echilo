@@ -1,0 +1,57 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Anunciar imóvel — Echilo{% endblock %}
+{% block description %}Tenha um imóvel, apartamento ou terreno? A equipa do Echilo valida e publica por si.{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--intake">
+    <div class="section__head section__head--stacked" data-reveal>
+      <span class="eyebrow">Passo 1 de 3 — Captação</span>
+      <h2>Anunciar o seu imóvel com a equipa Echilo</h2>
+      <p>
+        O proprietário não publica directamente. Ao enviar este formulário, a equipa entra em
+        contacto para recolher as fotos, confirmar a localização por satélite, validar a
+        documentação legal e registar o anúncio.
+      </p>
+    </div>
+
+    <ol class="flow mb-32">
+      <li><span class="flow__num">1</span><div><h3>Contacto directo</h3><p>Deixa os teus dados e descreves o imóvel em duas linhas.</p></div></li>
+      <li><span class="flow__num">2</span><div><h3>Curadoria e triagem</h3><p>A equipa confirma fotos, pin no mapa, preço, contrato e documentação.</p></div></li>
+      <li><span class="flow__num">3</span><div><h3>Cadastro gerido</h3><p>Registamos o imóvel com informação padronizada e publicamos.</p></div></li>
+    </ol>
+
+    <div class="sidebar-card" data-reveal="scale">
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert--error" role="alert">
+            <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+            <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+          </div>
+        {% endif %}
+
+        {% include "partials/form_field.html" with field=form.full_name %}
+        {% include "partials/form_field.html" with field=form.phone %}
+        {% include "partials/form_field.html" with field=form.email %}
+        {% include "partials/form_field.html" with field=form.purpose_interest %}
+        {% include "partials/form_field.html" with field=form.message %}
+
+        <button class="btn btn--primary btn--block btn--lg" type="submit">
+          Enviar e aguardar contacto da equipa
+        </button>
+      </form>
+    </div>
+
+    <p class="trust-note mt-20">
+      <svg class="i i--offset" aria-hidi--offset"><use href="#lock"/></svg>
+      <span>
+        O teu telefone é usado apenas pela equipa para falar sobre o imóvel. Nunca é
+        publicado na plataforma.
+      </span>
+    </p>
+  </div>
+</section>
+{% endblock %}

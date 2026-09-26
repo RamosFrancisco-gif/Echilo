@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Pedido recebido — Echilo{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--md wrap--center">
+    <span class="icon-box icon-box--lg">
+      <svg class="i" aria-hidden="true"><use href="#check"/></svg>
+    </span>
+    <h1 class="t-display--sm mb-14">Recebemos o seu contacto</h1>
+    <p class="text-muted t-lead wrap--center mb-26">
+      A equipa do Echilo entra em contacto contigo nas próximas horas. Vamos pedir as fotos,
+      confirmar a localização por satélite e validar a documentação antes de registar o imóvel.
+    </p>
+
+    <div class="sidebar-card mb-24">
+      <h3 class="t-card">O que acontece agora</h3>
+      <ul class="flow flow--tight">
+        <li><span class="flow__num">1</span><div><h3>Contacto da equipa</h3><p>Confirmamos os dados e o que tens disponível.</p></div></li>
+        <li><span class="flow__num">2</span><div><h3>Levantamento das fotos</h3><p>Pelo menos cinco fotografias, a primeira é a capa.</p></div></li>
+        <li><span class="flow__num">3</span><div><h3>Confirmação do pin</h3><p>Inspeção de satélite para proteger a tua morada exacta.</p></div></li>
+        <li><span class="flow__num">4</span><div><h3>Publicação</h3><p>O imóvel entra no catálogo com informação verificada.</p></div></li>
+      </ul>
+    </div>
+
+    <div class="hero__actions hero__actions--center">
+      <a class="btn btn--primary" href="{% url 'properties:property_list' %}">Ver imóveis publicados</a>
+      <a class="btn" href="{% url 'properties:home' %}">Voltar ao início</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

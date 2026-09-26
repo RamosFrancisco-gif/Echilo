@@ -1,0 +1,41 @@
+{% extends "accounts/base_auth.html" %}
+
+{% block title %}Entrar — Echilo{% endblock %}
+
+{% block form %}
+<form method="post" action="{% url 'accounts:login' %}" novalidate>
+  {% csrf_token %}
+
+  {% if form.non_field_errors %}
+    <div class="alert alert--error" role="alert">
+      <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+      <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+    </div>
+  {% endif %}
+
+  {% if rate_limited %}
+    <div class="alert alert--error" role="alert">
+      <svg class="i" aria-hidden="true"><use href="#clock"/></svg>
+      <span>Demasiadas tentativas a partir deste dispositivo. Aguarde alguns minutos.</span>
+    </div>
+  {% endif %}
+
+  {% include "partials/form_field.html" with field=form.email %}
+  {% include "partials/form_field.html" with field=form.password %}
+
+  <div class="auth__options">
+    <label class="checkbox-row" for="{{ form.remember_me.id_for_label }}">
+      {{ form.remember_me }}
+      <span>Manter sessão iniciada</span>
+    </label>
+    <a href="{% url 'accounts:password_reset' %}">Esqueci a palavra-passe</a>
+  </div>
+
+  <input type="hidden" name="next" value="{{ next }}">
+  <button class="btn btn--primary btn--block btn--lg" type="submit">Entrar</button>
+</form>
+
+<p class="auth__alt">
+  Ainda não tem conta? <a href="{% url 'accounts:register' %}">Criar conta gratuita</a>
+</p>
+{% endblock %}

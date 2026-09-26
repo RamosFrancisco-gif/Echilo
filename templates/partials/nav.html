@@ -1,0 +1,61 @@
+{% load static %}
+<header class="nav">
+  <div class="wrap nav__inner">
+    <a class="logo" href="{% url 'properties:home' %}" aria-label="Echilo, página inicial">
+      <span class="logo__text">Echi<span>lo</span></span>
+    </a>
+
+    <nav class="nav__links" aria-label="Navegação principal">
+      <a href="{% url 'properties:property_list' %}?purpose=RENT"{% if request.GET.purpose == 'RENT' %} aria-current="page"{% endif %}>Arrendar</a>
+      <a href="{% url 'properties:property_list' %}?purpose=SALE"{% if request.GET.purpose == 'SALE' %} aria-current="page"{% endif %}>Comprar</a>
+      <a href="{% url 'properties:property_list' %}?type=LAND"{% if request.GET.type == 'LAND' %} aria-current="page"{% endif %}>Terrenos</a>
+      <a href="{% url 'properties:home' %}#como-funciona"{% if request.resolver_match.url_name == 'home' %} aria-current="page"{% endif %}>Como funciona</a>
+      <a href="{% url 'assistant:chat' %}">Assistente</a>
+    </nav>
+
+    <div class="nav__actions">
+      {% if current_user.is_authenticated %}
+        <a class="user-chip" href="{% url 'properties:property_list' %}">
+          <span class="user-chip__avatar" aria-hidden="true">{{ current_user.initials }}</span>
+          <span>{{ current_user.full_name|truncatechars:18 }}</span>
+        </a>
+        <form method="post" action="{% url 'accounts:logout' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--sm">Sair</button>
+        </form>
+      {% else %}
+        <a class="btn btn--sm" href="{% url 'accounts:login' %}">Entrar</a>
+        <a class="btn btn--primary btn--sm" href="{% url 'accounts:register' %}">Criar conta</a>
+      {% endif %}
+      <a class="btn btn--sm" href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+    </div>
+
+    <button type="button" class="nav__burger" id="nav-burger" aria-label="Abrir menu" aria-expanded="false" aria-controls="nav-menu">
+      <svg class="nav__burger-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <line class="nav__burger-bar nav__burger-bar--top" x1="4" y1="7" x2="20" y2="7"/>
+        <line class="nav__burger-bar nav__burger-bar--mid" x1="4" y1="12" x2="20" y2="12"/>
+        <line class="nav__burger-bar nav__burger-bar--bottom" x1="4" y1="17" x2="20" y2="17"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="nav__menu" id="nav-menu">
+    <div class="nav__menu-inner">
+      <a href="{% url 'properties:property_list' %}?purpose=RENT">Arrendar</a>
+      <a href="{% url 'properties:property_list' %}?purpose=SALE">Comprar</a>
+      <a href="{% url 'properties:property_list' %}?type=LAND">Terrenos</a>
+      <a href="{% url 'properties:home' %}#como-funciona">Como funciona</a>
+      <a href="{% url 'assistant:chat' %}">Assistente</a>
+      <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% if current_user.is_authenticated %}
+        <form method="post" action="{% url 'accounts:logout' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn">Sair da conta</button>
+        </form>
+      {% else %}
+        <a class="btn" href="{% url 'accounts:login' %}">Entrar</a>
+        <a class="btn btn--primary" href="{% url 'accounts:register' %}">Criar conta gratuita</a>
+      {% endif %}
+    </div>
+  </div>
+</header>

@@ -1,0 +1,28 @@
+<footer class="footer">
+  <div class="wrap footer__inner">
+    <div>
+      <a class="logo" href="{% url 'properties:home' %}">
+        <span class="logo__text">Echi<span>lo</span></span>
+      </a>
+      <p class="footer__note">
+        Mediação imobiliária curada em Angola. Cada imóvel é verificado pela nossa equipa
+        antes de ser publicado, com localização confirmada por satélite e documentação legal
+        validada.
+      </p>
+    </div>
+
+    <nav class="footer__nav" aria-label="Navegação do rodapé">
+      <a href="{% url 'properties:property_list' %}?purpose=RENT">Arrendar</a>
+      <a href="{% url 'properties:property_list' %}?purpose=SALE">Comprar</a>
+      <a href="{% url 'properties:property_list' %}?type=LAND">Terrenos</a>
+      <a href="{% url 'properties:home' %}#como-funciona">Como funciona</a>
+      <a href="{% url 'assistant:chat' %}">Assistente</a>
+      <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+    </nav>
+
+    <p class="footer__legal">
+      © {% now "Y" %} Echilo. Luanda, Angola.<br>
+      Preços em Kwanza (AOA).
+    </p>
+  </div>
+</footer>

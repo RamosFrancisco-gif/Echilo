@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Echilo">
+  <rect width="64" height="64" rx="14" fill="#0c0906"/>
+  <path d="M32 13 L52 30" stroke="#d98a12" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <path d="M13 30 h39" stroke="#f5a623" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <path d="M20 30 V53" stroke="#f5a623" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <path d="M20 41 h14" stroke="#f5a623" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <path d="M32 30 V53" stroke="#f5a623" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <path d="M44 30 V53" stroke="#f5a623" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+</svg>

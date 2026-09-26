@@ -1,0 +1,20 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Página não encontrada — Echilo{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--sm wrap--center" data-reveal="scale">
+    <span class="eyebrow">Erro 404</span>
+    <h1 class="t-display">Não encontrámos esta página</h1>
+    <p class="text-muted mb-26">
+      O endereço pode ter mudado ou o imóvel pode já não estar publicado. Tente a pesquisa
+      ou fale com a equipa.
+    </p>
+    <div class="hero__actions hero__actions--center">
+      <a class="btn btn--primary" href="{% url 'properties:property_list' %}">Ver imóveis</a>
+      <a class="btn" href="{% url 'assistant:chat' %}">Perguntar ao assistente</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

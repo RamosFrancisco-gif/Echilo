@@ -1,0 +1,11 @@
+{% comment %}
+  Trecho de mensagens do chat. É substituído por HTMX após cada pergunta, por isso
+  nunca deve depender de contexto que não seja fornecido pela view.
+{% endcomment %}
+{% for message in messages %}
+  <div class="bubble {% if message.author == 'CLIENT' %}bubble--client{% elif message.author == 'STAFF' %}bubble--staff{% endif %}{% if message.is_escalation_notice %} bubble--notice{% endif %}">
+    {{ message.body|linebreaksbr }}
+  </div>
+{% empty %}
+  <p class="chat__empty">{{ greeting|default:"Em que posso ajudar? Posso mostrar imóveis publicados, explicar características ou comparar opções." }}</p>
+{% endfor %}

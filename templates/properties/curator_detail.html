@@ -1,0 +1,156 @@
+﻿{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}{{ property.reference }} — curadoria{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <a class="auth__back" href="{% url 'properties:curator_create' %}">
+      <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+      Voltar à curadoria
+    </a>
+
+    <div class="section__head mt-16" data-reveal>
+      <div>
+        <span class="eyebrow">{{ property.reference }}</span>
+        <h2>{{ property.title }}</h2>
+        <p>
+          {{ property.get_status_display }} · {{ property.price|kwanza }} ·
+          {{ property.municipality }}, {{ property.get_province_ref_display }} ·
+          curador {{ property.curated_by.full_name }}
+        </p>
+      </div>
+      <div class="chip-row m-0">
+        <span class="badge {% if property.status == 'PUBLISHED' %}badge--ok{% else %}badge--warn{% endif %}">
+          {{ property.get_status_display }}
+        </span>
+      </div>
+    </div>
+
+    <div class="levels mb-28">
+      <article class="level level--human">
+        <span class="level__tag">Etapa 2 — Triagem</span>
+        <h3>{% if ready_for_review %}Triagem completa{% else %}Falta informação{% endif %}</h3>
+        {% if missing_items %}
+          <ul>
+            {% for item in missing_items %}<li><svg class="i" aria-hidden="true"><use href="#alert"/></svg>{{ item }}</li>{% endfor %}
+          </ul>
+        {% else %}
+          <p>O dossiê tem tudo o que §2.1 exige antes de o imóvel avançar para publicação.</p>
+        {% endif %}
+      </article>
+
+      <article class="level level--ai">
+        <span class="level__tag">Etapa 3 — Documentação</span>
+        <h3>{% if missing_documents %}Documentos por verificar{% else %}Documentação conforme{% endif %}</h3>
+        {% if missing_documents %}
+          <ul>
+            {% for item in missing_documents %}<li><svg class="i" aria-hidden="true"><use href="#document"/></svg>{{ item }}</li>{% endfor %}
+          </ul>
+        {% else %}
+          <p>Escritura e documento de identificação verificados. O imóvel pode ser publicado.</p>
+        {% endif %}
+      </article>
+    </div>
+
+    <div class="detail detail--aside" data-reveal>
+      <div class="sidebar-card">
+        <h3>Alterar dados do imóvel</h3>
+        <form method="post" novalidate class="mt-18">
+          {% csrf_token %}
+
+          {% if form.non_field_errors %}
+            <div class="alert alert--error" role="alert">
+              <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+              <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+            </div>
+          {% endif %}
+
+          {% include "partials/form_field.html" with field=form.title %}
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.type %}
+            {% include "partials/form_field.html" with field=form.purpose %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.price %}
+            {% include "partials/form_field.html" with field=form.lease_term_months %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.province_ref %}
+            {% include "partials/form_field.html" with field=form.municipality %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.latitude %}
+            {% include "partials/form_field.html" with field=form.longitude %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.bedrooms %}
+            {% include "partials/form_field.html" with field=form.bathrooms %}
+          </div>
+
+          <button class="btn btn--primary btn--block" type="submit">Guardar alterações</button>
+        </form>
+      </div>
+
+      <aside>
+        <div class="sidebar-card">
+          <h3>Mudar de estado</h3>
+          <p>Todas as transições ficam registadas em {{ property.reference }}.</p>
+
+          {% if allowed_transitions %}
+            <form method="post" action="{% url 'properties:curator_transition' property.reference %}" class="form-stack">
+              {% csrf_token %}
+              <div class="field">
+                <label class="label" for="to_status">Novo estado</label>
+                <select class="field-control" name="to_status" id="to_status" required>
+                  {% for code, label in allowed_transitions %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+                </select>
+              </div>
+              <div class="field">
+                <label class="label" for="reason">Justificação</label>
+                <input class="field-control" type="text" name="reason" id="reason" maxlength="240" placeholder="Obrigatória em publicação e arquivo">
+              </div>
+              <button class="btn btn--primary btn--block" type="submit">Aplicar transição</button>
+            </form>
+          {% else %}
+            <p>Este imóvel não tem transições disponíveis a partir do estado actual.</p>
+          {% endif %}
+        </div>
+
+        <div class="sidebar-card mt-16">
+          <h3>Fotografias ({{ property.images.count }})</h3>
+          <p>Mínimo de 5 para a triagem fechar.</p>
+          <form method="post" action="{% url 'properties:curator_images' property.reference %}" enctype="multipart/form-data" class="form-stack">
+            {% csrf_token %}
+            <div class="field">
+              <label class="label" for="foto">Adicionar fotografia</label>
+              <input class="field-control" type="file" name="foto" id="foto" accept="image/*" required>
+            </div>
+            <button class="btn btn--block" type="submit">Carregar</button>
+          </form>
+        </div>
+
+        <div class="sidebar-card mt-16">
+          <h3>Histórico</h3>
+          <ul class="feature-list m-0">
+            {% for event in status_events %}
+              <li>
+                <svg class="i" aria-hidden="true"><use href="#clock"/></svg>
+                <span>
+                  {{ event.get_from_status_display }}
+                  <svg class="i i--inline" aria-hidden="true"><use href="#arrow-right"/></svg>
+                  {{ event.get_to_status_display }}<br>
+                  <small class="text-muted-2">{{ event.actor.full_name }} · {{ event.created_at|date:"d/m/Y H:i" }}</small>
+                </span>
+              </li>
+            {% empty %}
+              <li>Sem transições registadas.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+{% endblock %}

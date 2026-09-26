@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% load echilo_format humanize static %}
+
+{% block title %}Imóveis{% if filters.purpose == 'RENT' %} para arrendar{% elif filters.purpose == 'SALE' %} para comprar{% endif %} em Angola — Echilo{% endblock %}
+
+{% block head_extra %}
+  {% comment %}
+    Só o catálogo carrega o mapa; a ficha do imóvel não precisa dele.
+
+    As duas bibliotecas vão no `head`, e não no bloco de scripts do corpo, por
+    uma razão que já custou uma bug: `echilo.js` chama `ready()` de imediato
+    quando o documento já não está a carregar, e com `defer` isso acontece
+    enquanto ele próprio executa — ou seja, antes de qualquer `defer` que venha
+    depois no corpo. Postas aqui, executam antes dele e `window.L` já existe
+    quando o mapa é montado.
+  {% endcomment %}
+  <link rel="stylesheet" href="{% static 'vendor/leaflet/1.9.4/leaflet.css' %}">
+  <link rel="stylesheet" href="{% static 'vendor/leaflet-draw/1.0.4/leaflet.draw.css' %}">
+  <script src="{% static 'vendor/leaflet/1.9.4/leaflet.js' %}" defer></script>
+  <script src="{% static 'vendor/leaflet-draw/1.0.4/leaflet.draw.js' %}" defer></script>
+{% endblock %}
+
+{% block scripts %}
+  {{ map_config|json_script:"area-map-config" }}
+{% endblock %}
+
+{% block content %}
+{% if not request.htmx %}
+<section class="section">
+  <div class="wrap">
+    <div class="section__head" data-reveal>
+      <div>
+        <span class="eyebrow">Catálogo</span>
+        <h2>{% if filters.purpose == 'RENT' %}Imóveis para arrendar{% elif filters.purpose == 'SALE' %}Imóveis para comprar{% elif filters.property_type == 'LAND' %}Terrenos{% else %}Todos os imóveis{% endif %}</h2>
+        <p>Só mostramos imóveis publicados pela equipa, com documentação legal verificada e localização confirmada.</p>
+      </div>
+    </div>
+
+    <div class="chip-row" data-reveal>
+      <a class="chip" aria-pressed="{% if not filters.purpose and not filters.property_type %}true{% else %}false{% endif %}"
+         href="{% if chip_all %}?{{ chip_all }}{% else %}{% url 'properties:property_list' %}{% endif %}">Todos</a>
+      <a class="chip" aria-pressed="{% if filters.purpose == 'RENT' %}true{% else %}false{% endif %}"
+         href="?{{ chip_rent }}">Arrendar</a>
+      <a class="chip" aria-pressed="{% if filters.purpose == 'SALE' %}true{% else %}false{% endif %}"
+         href="?{{ chip_sale }}">Comprar</a>
+      <a class="chip" aria-pressed="{% if filters.property_type == 'LAND' %}true{% else %}false{% endif %}"
+         href="?{{ chip_land }}">Terrenos</a>
+    </div>
+
+    <section class="area-search" aria-labelledby="area-search-title">
+      <div class="area-search__head">
+        <span class="eyebrow">Mapa</span>
+        <h2 id="area-search-title"><svg class="i mr-6" aria-hidden="true"><use href="#pin"/></svg>Veja onde estão os imóveis</h2>
+        <p>Cada ponto é um imóvel publicado, com a localização confirmada pela nossa equipa. Carregue num ponto para o ver, ou desenhe um círculo para limitar a pesquisa a essa zona.</p>
+      </div>
+
+      {% comment %}
+        Os pinos são o que dá sentido ao mapa: sem eles o mapa era um rectângulo
+        escuro com um raio para desenhar. Vêm do servidor já com o preço
+        formatado, porque um pino não sabe escrever Kwanza.
+      {% endcomment %}
+      {{ map_payload|json_script:"area-map-markers" }}
+
+      <div class="area-search__body">
+        <div class="area-search__map" id="area-map" role="region" aria-label="Mapa de Angola com os imóveis publicados e a área de pesquisa"></div>
+
+        <div class="area-search__panel">
+          {% comment %}
+            O que o mapa está a mostrar é escrito pelo servidor, e não pelo
+            JavaScript: sem este bloco, quem abre a página sem JavaScript vê um
+            painel que não diz nada, e quem vê um mapa vazio não sabe se falta
+            o mapa ou o catálogo.
+          {% endcomment %}
+          <p class="area-search__count" id="area-count">
+            {% if not map_payload.items %}
+              Ainda não há imóveis publicados com a localização confirmada para marcar.
+            {% elif map_payload.incompletos %}
+              A mostrar {{ map_payload.mostrados }} de {{ map_payload.total }} imóveis publicados. A lista mostra todos.
+            {% else %}
+              {{ map_payload.total }} imóvel{% if map_payload.total != 1 %}es{% endif %} publicado{% if map_payload.total != 1 %}s{% endif %} no mapa.
+            {% endif %}
+          </p>
+          <p class="area-search__summary" id="area-summary" role="status">Sem área definida: o mapa mostra o catálogo inteiro.</p>
+
+          {% comment %}
+            O nome da divisão é a resposta que o utilizador procura e não tem de
+            adivinhar. Começa escrita pelo servidor e o JavaScript só a actualiza
+            quando o círculo muda, para que quem abre a página sem JavaScript
+            leia a mesma coisa.
+          {% endcomment %}
+          <p class="area-search__fraccao" id="area-fraccao" role="status"></p>
+
+          {% comment %}
+            O mapa não sabe se os tiles chegaram. Um fornecedor que recusa o
+            pedido com 403 deixava um rectângulo vazio e sem explicação, e o
+            filtro continuava a parecer quebrado. A mensagem diz o que fazer em
+            vez de deixar o utilizador adivinhar.
+          {% endcomment %}
+          <p class="area-search__error" id="area-error" role="alert" hidden></p>
+
+          <div class="area-search__buttons">
+            {% comment %}
+              Desenhar é a acção principal e tem de ter nome. O ícone de 30×30
+              que o plugin trazia não era lido como botão, e a ferramenta
+              parecia estar partida.
+            {% endcomment %}
+            <button class="btn btn--sm btn--primary" type="button" id="area-draw">Desenhar círculo</button>
+            <button class="btn btn--sm" type="button" id="area-apply">Procurar nesta área</button>
+            <button class="btn btn--sm" type="button" id="area-clear"{% if not filters.has_area %} hidden{% endif %}>Limpar área</button>
+          </div>
+
+          <div class="field">
+            <label class="label" for="area-raio">Raio a partir do centro do mapa</label>
+            <input class="field-control" type="number" id="area-raio" min="{{ map_config.minRadiusM }}" max="{{ map_config.maxRadiusM }}" step="100" value="{{ filters.radius_m|default:2000 }}">
+          </div>
+
+          {% if map_payload.items %}
+            <ul class="area-search__legend">
+              <li><span class="area-search__dot area-search__dot--rent" aria-hidden="true"></span>Para arrendar</li>
+              <li><span class="area-search__dot area-search__dot--sale" aria-hidden="true"></span>Para vender</li>
+            </ul>
+          {% endif %}
+
+          <p class="area-search__note">Sem ratão? Foque o mapa, desloque-o com as setas, carregue em «Desenhar círculo» ou escolha o raio e carregue em «Procurar nesta área».</p>
+
+          {% comment %}
+            A atribuição não é um detalhe: a CC BY 4.0 exige que quem usa os
+            dados diga de onde são. Escreve-se no painel, e não num README que
+            ninguém vê, porque quem chega ao mapa é quem consome a camada.
+          {% endcomment %}
+          <p class="area-search__fonte">Fronteiras: geoBoundaries (CC BY 4.0), simplificadas para referência.</p>
+        </div>
+      </div>
+    </section>
+
+
+    <div class="listing">
+      <aside class="filters" data-reveal="left">
+        <div class="filters__head">
+          <h2><svg class="i mr-6" aria-hidden="mr-6"><use href="#filter"/></svg>Filtros</h2>
+          {% if active_filters %}
+            <a class="section__link" href="{% url 'properties:property_list' %}">Limpar</a>
+          {% endif %}
+        </div>
+
+        <form method="get" action="{% url 'properties:property_list' %}" hx-get="{% url 'properties:property_list' %}" hx-target="#listing-resultados" hx-swap="innerHTML" hx-trigger="change delay:300ms, submit" hx-push-url="true" hx-indicator="#listing-skeleton">
+          {% if filters.purpose %}<input type="hidden" name="purpose" value="{{ filters.purpose }}">{% endif %}
+          {% comment %}
+            A área desenhada no mapa vive aqui, dentro do formulário, para que o
+            HTMX a serialize sem o JavaScript ter de a replicar na query string.
+            Vazios são ignorados pelo servidor, por isso renderizá-los sempre
+            poupa de os criar e destruir a cada desenho.
+
+            O filtro `coordinate` não é um detalhe: com `pt-AO` o Django escreve
+            `-8,918430`, e o servidor deixava de conseguir ler a coordenada que o
+            próprio template acabara de escrever. Quem vai para o URL usa ponto
+            decimal ou não usa nada.
+          {% endcomment %}
+          <input type="hidden" name="center_lat" id="f-area-lat" value="{{ filters.center_lat|coordinate }}">
+          <input type="hidden" name="center_lon" id="f-area-lon" value="{{ filters.center_lon|coordinate }}">
+          <input type="hidden" name="radius_m" id="f-area-raio" value="{{ filters.radius_m|coordinate }}">
+
+          <div class="field">
+            <label class="label" for="f-province">Província</label>
+            <select class="field-control" name="province" id="f-province">
+              <option value="">Todas</option>
+              {% for code, label in search_form.province.field.choices %}{% if code %}<option value="{{ code }}"{% if filters.province == code %} selected{% endif %}>{{ label }}</option>{% endif %}{% endfor %}
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="label" for="f-municipio">Município ou localidade</label>
+            <input class="field-control" type="text" name="municipality" id="f-municipio" list="municipios-disponiveis" value="{{ filters.municipality|default:'' }}" placeholder="Talatona">
+            <datalist id="municipios-disponiveis">
+              {% for area in available_municipalities %}<option value="{{ area }}"></option>{% endfor %}
+            </datalist>
+          </div>
+
+          <div class="field">
+            <label class="label" for="f-tipo">Tipologia</label>
+            <select class="field-control" name="type" id="f-tipo">
+              <option value="">Todas</option>
+              {% for code, label in type_choices %}<option value="{{ code }}"{% if filters.property_type == code %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label class="label" for="f-preco-min">Preço mín.</label>
+              <input class="field-control" type="number" name="min_price" id="f-preco-min" min="0" step="1000" value="{{ filters.min_price|default:'' }}" placeholder="0">
+            </div>
+            <div class="field">
+              <label class="label" for="f-preco-max">Preço máx.</label>
+              <input class="field-control" type="number" name="max_price" id="f-preco-max" min="0" step="1000" value="{{ filters.max_price|default:'' }}" placeholder="Sem limite">
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="label" for="f-quartos">Quartos (mínimo)</label>
+            <input class="field-control" type="number" name="min_bedrooms" id="f-quartos" min="0" max="20" value="{{ filters.min_bedrooms|default:'' }}" placeholder="Qualquer">
+          </div>
+
+          <div class="field">
+            <label class="label" for="f-area">Área mínima (m²)</label>
+            <input class="field-control" type="number" name="min_area_m2" id="f-area" min="0" value="{{ filters.min_area_m2|default:'' }}" placeholder="Qualquer">
+          </div>
+
+          <fieldset class="fieldset mb-22">
+            <div class="field">
+              <label class="checkbox-row"><input type="checkbox" name="has_water_tank"{% if filters.has_water_tank %} checked{% endif %}>Com tanque de água</label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row"><input type="checkbox" name="has_generator"{% if filters.has_generator %} checked{% endif %}>Com gerador</label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row"><input type="checkbox" name="is_furnished"{% if filters.is_furnished %} checked{% endif %}>Mobilado</label>
+            </div>
+          </fieldset>
+
+          <button class="btn btn--primary btn--block" type="submit">Aplicar filtros</button>
+          <p class="sr" role="status">A filtrar imóveis…</p>
+        </form>
+      </aside>
+
+      <div class="skeleton-pane">
+        <div id="listing-resultados">
+          {% include "partials/property_results.html" %}
+        </div>
+        <div class="htmx-skeleton" id="listing-skeleton" aria-hidden="true">
+          {% include "partials/skeleton_grid.html" %}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% else %}
+  {% include "partials/property_results.html" %}
+{% endif %}
+{% endblock %}

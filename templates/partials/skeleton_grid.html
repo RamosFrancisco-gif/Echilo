@@ -1,0 +1,21 @@
+{% load echilo_format %}
+{% comment %}
+  Esqueleto de carregamento do catálogo. Reproduz a silhueta de
+  `partials/property_card.html` para que a grelha não mude de forma quando os
+  resultados chegam. Só existe dentro de `<main>`; o cabeçalho nunca carrega.
+  Contexto: `skeleton_count` (número de cartões, opcional, por omissão 6).
+{% endcomment %}
+<div class="grid-properties" aria-hidden="true">
+  {% for _ in skeleton_count|default:6|repeat %}
+    <article class="card-property">
+      <div class="skeleton skeleton--media"></div>
+      <div class="card-property__body">
+        <div class="skeleton skeleton--price"></div>
+        <div class="skeleton skeleton--title"></div>
+        <div class="skeleton skeleton--line skeleton--line--tiny"></div>
+        <div class="skeleton skeleton--line skeleton--line--mid"></div>
+        <div class="skeleton skeleton--line skeleton--line--short"></div>
+      </div>
+    </article>
+  {% endfor %}
+</div>

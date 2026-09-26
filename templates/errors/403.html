@@ -1,0 +1,20 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Acesso restrito — Echilo{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--sm wrap--center" data-reveal="scale">
+    <span class="eyebrow">Erro 403</span>
+    <h1 class="t-display">Área reservada à equipa</h1>
+    <p class="text-muted mb-26">
+      Esta parte do Echilo é usada pela equipa interna para curadoria e validação. O registo
+      e a publicação de imóveis nunca são feitos pelo proprietário.
+    </p>
+    <div class="hero__actions hero__actions--center">
+      <a class="btn btn--primary" href="{% url 'properties:property_list' %}">Ver imóveis</a>
+      <a class="btn" href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

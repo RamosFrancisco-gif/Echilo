@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% load echilo_format humanize %}
+
+{% block title %}Echilo — arrendar, comprar e anunciar imóveis e terrenos em Angola{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div class="wrap hero__inner">
+    <div>
+      <span class="pill">Arrendar · Comprar · Terrenos</span>
+      <h1>Encontra a tua casa ou terreno e fala com quem <em>vende e arrenda</em></h1>
+      <p class="hero__lead">
+        O Echilo não é um quadro de anúncios. Cada imóvel é validado por uma equipa interna
+        antes de aparecer aqui, com localização confirmada por satélite e documentação legal
+        verificada.
+      </p>
+
+      <form class="search-panel" method="get" action="{% url 'properties:property_list' %}" role="search">
+        <div class="tabs" role="tablist" aria-label="O que procuras">
+          <button type="button" class="tab" role="tab" aria-selected="true" data-scope="purpose:RENT">Arrendar</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-scope="purpose:SALE">Comprar</button>
+          <button type="button" class="tab" role="tab" aria-selected="false" data-scope="type:LAND">Terrenos</button>
+        </div>
+
+        <input type="hidden" name="purpose" id="search-purpose" value="RENT">
+        <input type="hidden" name="type" id="search-type" value="">
+
+        <div class="search-panel__row">
+          <label class="sr" for="search-province">Província</label>
+          <select class="field-control" name="province" id="search-province">
+            {% for code, label in province_choices %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+          </select>
+          <button class="btn btn--primary" type="submit">
+            <svg class="i" aria-hidden="true"><use href="#search"/></svg>
+            Pesquisar
+          </button>
+        </div>
+      </form>
+
+      <div class="stats">
+        <div class="stat"><b>{{ total_published|intcomma }}</b><small>Imóveis publicados</small></div>
+        <div class="stat"><b>{{ rent_count|intcomma }}</b><small>Para arrendar</small></div>
+        <div class="stat"><b>{{ land_count|intcomma }}</b><small>Terrenos</small></div>
+        <div class="stat"><b>{{ province_count|intcomma }}</b><small>Províncias</small></div>
+      </div>
+
+      <div class="hero__actions">
+        <a class="btn btn--primary" href="{% url 'accounts:register' %}">Criar conta gratuita</a>
+        <a class="btn" href="{% url 'concierge:owner_intake' %}">Quero anunciar o meu imóvel</a>
+      </div>
+    </div>
+
+    <div class="hero__showcase">
+      <div class="hero__chip hero__chip--a">
+        <span class="icon-box icon-box--sm"><svg class="i" aria-hidden="true"><use href="#chat"/></svg></span>
+        <div>
+          <b>Assistente disponível 24/7</b>
+          <small>Tira dúvidas sobre qualquer imóvel publicado</small>
+        </div>
+      </div>
+
+      {% if featured %}
+        {% with prop=featured.0 cover=featured.0.images.first %}
+          <article class="card-property accent-{{ prop.tone }} sidebar-card--raised">
+            <div class="card-property__media card-property__media--wide">
+              {% if cover %}
+                <img src="{{ cover.image.url }}" alt="{{ prop.title }}" width="800" height="450">
+              {% else %}
+                <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+              {% endif %}
+              <span class="card-property__tag">{% if prop.purpose == 'RENT' %}Arrendar{% else %}Vender{% endif %}</span>
+            </div>
+            <div class="card-property__body">
+              <p class="card-property__price">{{ prop.price|kwanza }}<small>{% if prop.purpose == 'RENT' %}/mês{% endif %}</small></p>
+              <h3 class="card-property__title">{{ prop.title }}</h3>
+              <p class="card-property__place">
+                <svg class="i" aria-hidden="true"><use href="#pin"/></svg>
+                {{ prop.locality|default:prop.municipality }}, {{ prop.get_province_ref_display }}
+              </p>
+              <div class="card-property__meta">
+                {% if prop.bedrooms %}<span><svg class="i" aria-hidden="true"><use href="#bed"/></svg>{{ prop.bedrooms }} quartos</span>{% endif %}
+                {% if prop.bathrooms %}<span><svg class="i" aria-hidden="true"><use href="#bath"/></svg>{{ prop.bathrooms }} WC</span>{% endif %}
+                {% if prop.area_m2 %}<span><svg class="i" aria-hidden="true"><use href="#ruler"/></svg>{{ prop.area_m2 }} m²</span>{% endif %}
+              </div>
+              <p class="card-property__foot">
+                <svg class="i" aria-hidden="true"><use href="#shield"/></svg>
+                Localização confirmada por satélite
+              </p>
+            </div>
+          </article>
+        {% endwith %}
+      {% else %}
+        <div class="sidebar-card">
+          <h3>Catálogo em preparação</h3>
+          <p>
+            A equipa está a concluir a curadoria dos primeiros imóveis. Enquanto isso, o
+            assistente já responde às tuas perguntas sobre o que vai entrar.
+          </p>
+          <a class="btn btn--primary btn--block" href="{% url 'assistant:chat' %}">
+            Falar com o assistente
+          </a>
+        </div>
+      {% endif %}
+
+      <div class="hero__chip hero__chip--b">
+        <span class="icon-box icon-box--sm"><svg class="i" aria-hidden="true"><use href="#satellite"/></svg></span>
+        <div>
+          <b>Pin verificado</b>
+          <small>Inspeção de satélite antes de publicar</small>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="features">
+      <article data-reveal>
+        <span class="icon-box"><svg class="i" aria-hidden="true"><use href="#home"/></svg></span>
+        <h3>Arrendar</h3>
+        <p>Casas, apartamentos e escritórios com renda em Kwanza e prazo de contrato claro.</p>
+      </article>
+      <article data-reveal>
+        <span class="icon-box"><svg class="i" aria-hidden="true"><use href="#building"/></svg></span>
+        <h3>Comprar</h3>
+        <p>Moradias e apartamentos com escritura verificada e preço à vista ou negociado.</p>
+      </article>
+      <article data-reveal>
+        <span class="icon-box"><svg class="i" aria-hidden="true"><use href="#land"/></svg></span>
+        <h3>Terrenos</h3>
+        <p>Lotes urbanos e rurais com área confirmada e limites mapeados.</p>
+      </article>
+      <article data-reveal>
+        <span class="icon-box"><svg class="i" aria-hidden="true"><use href="#document"/></svg></span>
+        <h3>Documentação legal</h3>
+        <p>Escritura, certidão de registo predial e IUR verificados antes da publicação.</p>
+      </article>
+      <article data-reveal>
+        <span class="icon-box"><svg class="i" aria-hidden="true"><use href="#satellite"/></svg></span>
+        <h3>Localização por satélite</h3>
+        <p>Nenhum pin vem da morada escrita. A equipa confirma a posição antes de publicar.</p>
+      </article>
+      <article>
+        <span class="icon-box"><svg class="i" aria-hidden="true"><use href="#whatsapp"/></svg></span>
+        <h3>Apoio da equipa</h3>
+        <p>Visitas, propostas e fecho de contrato tratados por pessoas, não por algoritmos automáticos.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="como-funciona">
+  <div class="wrap split">
+    <div data-reveal="left">
+      <span class="eyebrow">Como funciona</span>
+      <h2>Do primeiro contacto à <em>visita confirmada</em></h2>
+      <p class="text-muted">
+        O processo é o mesmo para quem arrenda, para quem compra e para quem tem um terreno.
+        O proprietário nunca publica sozinho: a equipa valida tudo antes de o imóvel entrar
+        no catálogo.
+      </p>
+
+      <ul class="flow mt-26">
+        <li>
+          <span class="flow__num">1</span>
+          <div>
+            <h3>Entramos em contacto</h3>
+            <p>Preenches o formulário de adesão ou mandas mensagem no WhatsApp. Fica registado de imediato.</p>
+          </div>
+        </li>
+        <li>
+          <span class="flow__num">2</span>
+          <div>
+            <h3>A equipa faz a curadoria</h3>
+            <p>Confirmamos fotos, pin no mapa por satélite, preço, tipo de contrato e documentação legal.</p>
+          </div>
+        </li>
+        <li>
+          <span class="flow__num">3</span>
+          <div>
+            <h3>Publicamos com informação padronizada</h3>
+          <p>O imóvel aparece com as características confirmadas e a morada exacta protegida.</p>
+          </div>
+        </li>
+        <li>
+          <span class="flow__num">4</span>
+          <div>
+            <h3>Visitas e propostas com a equipa</h3>
+            <p>Pedes de visita e propostas formais são tratados por um agente do Echilo.</p>
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <div class="chat" id="assistente-preview" data-reveal="right">
+      <div class="chat__head">
+        <span class="avatar" aria-hidden="true">EC</span>
+        <div>
+          <b>Assistente Echilo</b>
+          <small>Responde sobre imóveis publicados, 24 horas por dia</small>
+        </div>
+      </div>
+      <div class="chat__body">
+        <div class="bubble bubble--client">Boa tarde. Tens terrenos para vender em Viana?</div>
+        <div class="bubble">
+          Sim, tenho <b>dois terrenos publicados em Viana</b>, ambos com a localização
+          confirmada por satélite. O primeiro tem 600 m² e está a 12,5 milhões de Kwanza.
+          Queres que compare com outro na zona?
+        </div>
+        <div class="bubble bubble--client">Aceita negociação?</div>
+        <div class="bubble bubble--notice">
+          Negociação é feita com a equipa, não por mim. Posso deixar o teu contacto e um
+          agente entra em contacto para conversarem.
+        </div>
+      </div>
+      <div class="chat__composer">
+        <a class="btn btn--primary btn--block" href="{% url 'assistant:chat' %}">
+          <svg class="i" aria-hidden="true"><use href="#sparkle"/></svg>
+          Abrir o assistente
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% if featured %}
+  <section class="section" id="destaques">
+    <div class="wrap">
+      <div class="section__head">
+        <div>
+          <span class="eyebrow">Imóveis publicados</span>
+          <h2>Encontra o que procuras</h2>
+          <p>Todos estes imóveis passaram por curadoria: fotos confirmadas, pin verificado por satélite e documentação legal validada.</p>
+        </div>
+        <a class="section__link" href="{% url 'properties:property_list' %}">
+          Ver todos
+          <svg class="i i--link" aria-hidden="true"><use href="#arrow-right"/></svg>
+        </a>
+      </div>
+
+      <div class="grid-properties">
+        {% for property in featured %}
+          {% include "partials/property_card.html" with cover_image=property.images.first %}
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endif %}
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="section__head">
+      <div>
+        <span class="eyebrow">Atendimento híbrido</span>
+        <h2>Dois níveis, sempre em português de Angola</h2>
+        <p>O assistente responde ao que é factual sobre imóveis publicados. Tudo o que envolve compromisso passa à equipa.</p>
+      </div>
+    </div>
+
+    <div class="levels">
+      <article class="level level--ai">
+        <span class="level__tag">Nível 1 — Automático</span>
+        <h3>Assistente com dados reais</h3>
+        <p>Responde sobre imóveis que já estão publicados, usando a base de dados da plataforma. Se não souber, diz que não sabe.</p>
+        <ul>
+          <li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Preço, renda e características confirmadas</li>
+          <li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Pesquisa por província, município e tipo</li>
+          <li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Comparação entre até três imóveis</li>
+          <li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Disponível 24 horas por dia</li>
+        </ul>
+        <a class="btn btn--block mt-20" href="{% url 'assistant:chamt-20">Testar o assistente</a>
+      </article>
+
+      <article class="level level--human">
+        <span class="level__tag">Nível 2 — Equipa Echilo</span>
+        <h3>Pessoas para o que tem compromisso</h3>
+        <p>Estes assuntos nunca são tratados pelo assistente. Um agente da equipa assume e responde com o seu nome.</p>
+        <ul>
+          <li><svg class="i" aria-hidden="true"><use href="#calendar"/></svg>Agendamento e remarcação de visitas</li>
+          <li><svg class="i" aria-hidden="true"><use href="#document"/></svg>Propostas formais e negociação de preço</li>
+          <li><svg class="i" aria-hidden="true"><use href="#shield"/></svg>Fecho de contrato e documentação legal</li>
+          <li><svg class="i" aria-hidden="true"><use href="#alert"/></svg>Reclamações e pedidos de remoção</li>
+        </ul>
+        <a class="btn btn--block mt-20" href="{% url 'concierge:owner_intakmt-20">Contactar a equipa</a>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section section--tight">
+  <div class="wrap">
+    <div class="sidebar-card hero--band">
+      <div>
+        <h2 class="t-display--xs">Tem um imóvel, apartamento ou terreno?</h2>
+        <p class="text-muted mt-8">
+          Não publica sozinho. A equipa do Echilo recolhe as fotos, confirma a localização por
+          satélite, valida a documentação e regista o anúncio com informação padronizada.
+        </p>
+      </div>
+      <div class="chip-row">
+        <a class="btn btn--primary btn--lg" href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+        <a class="btn btn--lg" href="{% url 'properties:property_list' %}">Procurar imóveis</a>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

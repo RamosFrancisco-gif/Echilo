@@ -1,0 +1,45 @@
+{% comment %}
+  Cartão de imóvel reutilizado nas listagens.
+  Contexto: property, url (opcional), cover_image (opcional).
+{% endcomment %}
+{% load echilo_format %}
+<article class="card-property accent-{{ property.tone }}" data-reveal>
+  <div class="card-property__media{% if not cover_image %} card-property__media--empty{% endif %}">
+    {% if cover_image %}
+      <img src="{{ cover_image.image.url }}" alt="{{ property.title }}" loading="lazy" width="640" height="400">
+    {% else %}
+      <svg class="i" aria-hidden="true"><use href="#{% if property.type == 'LAND' %}land{% elif property.type == 'APARTMENT' %}building{% else %}home{% endif %}"/></svg>
+    {% endif %}
+    <span class="card-property__tag">
+      {% if property.purpose == 'RENT' %}Arrendar{% else %}Vender{% endif %}
+    </span>
+  </div>
+
+  <div class="card-property__body">
+    <p class="card-property__price">
+      {{ property.price|kwanza }}<small>{% if property.purpose == 'RENT' %}/mês{% endif %}</small>
+    </p>
+
+    <h3 class="card-property__title">
+      <a href="{{ url|default:property.get_absolute_url }}">{{ property.title }}</a>
+    </h3>
+
+    <p class="card-property__place">
+      <svg class="i" aria-hidden="true"><use href="#pin"/></svg>
+      {{ property.locality|default:property.municipality|default:property.get_province_ref_display }}
+      {% if property.municipality %}, {{ property.get_province_ref_display }}{% endif %}
+    </p>
+
+    <div class="card-property__meta">
+      {% if property.bedrooms %}<span><svg class="i" aria-hidden="true"><use href="#bed"/></svg>{{ property.bedrooms }} quarto{{ property.bedrooms|pluralize:"s" }}</span>{% endif %}
+      {% if property.bathrooms %}<span><svg class="i" aria-hidden="true"><use href="#bath"/></svg>{{ property.bathrooms }} WC</span>{% endif %}
+      {% if property.land_area_m2 %}<span><svg class="i" aria-hidden="true"><use href="#ruler"/></svg>{{ property.land_area_m2 }} m² de terreno</span>{% endif %}
+      {% if property.area_m2 %}<span><svg class="i" aria-hidden="true"><use href="#ruler"/></svg>{{ property.area_m2 }} m²</span>{% endif %}
+    </div>
+
+    <p class="card-property__foot">
+      <svg class="i" aria-hidden="true"><use href="#shield"/></svg>
+      Verificado pela equipa
+    </p>
+  </div>
+</article>

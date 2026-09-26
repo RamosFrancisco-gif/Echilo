@@ -1,0 +1,18 @@
+{% comment %}Grelha de imóveis reutilizada na listagem e nas respostas parciais do HTMX.{% endcomment %}
+<div class="grid-properties">
+  {% for property in properties %}
+    {% include "partials/property_card.html" with cover_image=property.images.first %}
+  {% empty %}
+    <div class="empty">
+      <h3>Nenhum imóvel corresponde à pesquisa</h3>
+      <p>
+        Experimenta alargar o intervalo de preço ou remover alguns filtros. Se procuras
+        algo específico que ainda não está publicado, diz-nos pelo assistente.
+      </p>
+      <div class="hero__actions hero__actions--center mt-20">
+        <a class="btn" href="{% url 'properties:property_list' %}">Limpar filtros</a>
+        <a class="btn btn--primary" href="{% url 'assistant:chat' %}">Perguntar ao assistente</a>
+      </div>
+    </div>
+  {% endfor %}
+</div>

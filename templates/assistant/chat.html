@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}Assistente — Echilo{% endblock %}
+{% block description %}Assistente virtual do Echilo: responde sobre imóveis publicados, disponível 24 horas por dia.{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--assistant">
+    <div class="section__head section__head--stacked" data-reveal>
+      <span class="eyebrow">Nível 1 de atendimento</span>
+      <h2>Fala com o assistente do Echilo</h2>
+      <p>
+        O assistente responde apenas sobre imóveis publicados e verificados pela equipa. Para
+        visitas, propostas e fecho de contrato, a equipa assume o atendimento.
+      </p>
+    </div>
+
+    <div class="chat" id="chat" data-reveal="scale"
+         {% if conversation %}data-conversation-id="{{ conversation.pk }}"{% endif %}>
+      <div class="chat__head">
+        <span class="avatar" aria-hidden="true">EC</span>
+        <div>
+          <b>Assistente Echilo</b>
+          <small>
+            {% if is_escalated %}Atendimento encaminhado para a equipa
+            {% else %}Disponível 24 horas · dados em tempo real{% endif %}
+          </small>
+        </div>
+        <span class="badge {% if is_escalated %}badge--warn{% else %}badge--ok{% endif %} ml-auto">
+          {% if is_escalated %}Equipa{% else %}Nível 1{% endif %}
+        </span>
+      </div>
+
+      <div class="skeleton-pane chat__stream">
+        <div class="chat__body" id="chat-body" aria-live="polite">
+          {% include "assistant/_messages.html" %}
+        </div>
+        <div class="htmx-skeleton" id="chat-skeleton" aria-hidden="true">
+          <div class="skeleton skeleton-bubble"></div>
+          <div class="skeleton skeleton-bubble"></div>
+          <div class="skeleton skeleton-bubble skeleton-bubble--client"></div>
+        </div>
+      </div>
+
+      <form class="chat__composer"
+            hx-post="{% url 'assistant:chat_message' %}"
+            hx-target="#chat-body"
+            hx-swap="innerHTML"
+            hx-on::after-request="this.reset()"
+            hx-indicator="#chat-skeleton">
+        {% csrf_token %}
+        <input type="hidden" name="conversation_id" value="{{ conversation.pk|default:'' }}" id="conversation-id">
+        <label class="sr" for="chat-question">Escreva a sua pergunta</label>
+        <input class="field-control" type="text" name="question" id="chat-question" maxlength="400"
+               placeholder="Ex.: mostre-me terrenos em Viana" autocomplete="off" required>
+        <button class="btn btn--primary" type="submit">
+          <svg class="i" aria-hidden="true"><use href="#send"/></svg>
+          <span class="sr">Enviar</span>
+        </button>
+        <span class="sr" role="status">A equipa está a responder…</span>
+      </form>
+
+      <div class="chat__suggestions" id="chat-suggestions">
+        <button type="button" class="suggestion" data-question="Mostra-me terrenos em Viana">Terrenos em Viana</button>
+        <button type="button" class="suggestion" data-question="Que imóveis têm tanque de água em Luanda?">Com tanque de água</button>
+        <button type="button" class="suggestion" data-question="Qual é o preço médio de um T3 para arrendar em Talatona?">Preço de um T3</button>
+        <button type="button" class="suggestion" data-question="Compara ECH-LU-0001 com ECH-LU-0002">Comparar dois imóveis</button>
+      </div>
+    </div>
+
+    <div class="sidebar-card mt-28" data-reveal>
+      <h3>O que o assistente não faz</h3>
+      <p class="mb-14">Estes assuntos passam sempre para um agente da equipa:</p>
+      <ul class="feature-list m-0">
+        <li><svg class="i" aria-hidden="true"><use href="#calendar"/></svg>Agendar ou remarcar visitas</li>
+        <li><svg class="i" aria-hidden="true"><use href="#document"/></svg>Enviar propostas e negociar preço</li>
+        <li><svg class="i" aria-hidden="true"><use href="#shield"/></svg>Esclarecer documentação legal</li>
+        <li><svg class="i" aria-hidden="true"><use href="#alert"/></svg>Reclamações e remoção de anúncios</li>
+      </ul>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}{{ property.title }} — {{ property.get_province_ref_display }} — Echilo{% endblock %}
+{% block description %}{{ property.title }} em {{ property.municipality }}, {{ property.get_province_ref_display }}. {{ property.price|kwanza }}. Imóvel verificado pela equipa Echilo.{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <a class="auth__back" href="{% url 'properties:property_list' %}">
+      <svg class="i" aria-hidden="true"><use href="#search"/></svg>
+      Voltar ao catálogo
+    </a>
+
+    <div class="detail mt-18">
+      <div data-reveal="left">
+        <div class="gallery__main" id="galeria-principal">
+          {% if cover_image %}
+            <img src="{{ cover_image.image.url }}" alt="{{ property.title }}" id="galeria-img" width="960" height="600">
+          {% else %}
+            <div class="card-property__media card-property__media--empty card-property__media--full">
+              <svg class="i" aria-hidden="true"><use href="#{% if property.type == 'LAND' %}land{% elif property.type == 'APARTMENT' %}building{% else %}home{% endif %}"/></svg>
+            </div>
+          {% endif %}
+        </div>
+
+        {% if gallery|length > 1 %}
+          <div class="gallery__thumbs" role="list" aria-label="Fotografias do imóvel">
+            {% for image in gallery %}
+              <button type="button" role="listitem" class="gallery__thumb{% if forloop.first %} is-active{% endif %}"
+                      data-full="{{ image.image.url }}"
+                      aria-label="Ver fotografia {{ forloop.counter }} de {{ gallery|length }}">
+                <img src="{{ image.image.url }}" alt="{{ property.title }} — fotografia {{ forloop.counter }}"
+                     loading="lazy" width="88" height="62">
+              </button>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="chip-row mt-26">
+          <span class="badge badge--warn">{% if property.purpose == 'RENT' %}Arrendar{% else %}Vender{% endif %}</span>
+          <span class="badge badge--muted">{{ property.get_type_display }}</span>
+          <span class="badge badge--ok"><svg class="i t-xs" aria-hidden="t-xs"><use href="#shield"/></svg>Documentação verificada</span>
+          {% if property.location_verified_at %}
+            <span class="badge badge--ok"><svg class="i t-xs" aria-hidden="t-xs"><use href="#satellite"/></svg>Localização confirmada</span>
+          {% endif %}
+        </div>
+
+        <h1 class="detail__title">{{ property.title }}</h1>
+        <p class="detail__place">
+          <svg class="i" aria-hidden="true"><use href="#pin"/></svg>
+          {{ property.locality|default:property.municipality }}{% if property.municipality %}, {% endif %}{{ property.get_province_ref_display }}
+          <span class="badge badge--muted" title="A precisão é definida pela equipa após inspeção por satélite">
+            raio de {{ property.location_accuracy_m|default:"—" }} m
+          </span>
+        </p>
+
+        <div class="spec-grid">
+          {% if property.bedrooms %}
+            <div class="spec"><svg class="i" aria-hidden="true"><use href="#bed"/></svg><span><b>{{ property.bedrooms }}</b>quarto{{ property.bedrooms|pluralize:"s" }}</span></div>
+          {% endif %}
+          {% if property.bathrooms %}
+            <div class="spec"><svg class="i" aria-hidden="true"><use href="#bath"/></svg><span><b>{{ property.bathrooms }}</b>casas de banho</span></div>
+          {% endif %}
+          {% if property.area_m2 %}
+            <div class="spec"><svg class="i" aria-hidden="true"><use href="#ruler"/></svg><span><b>{{ property.area_m2 }} m²</b>área construída</span></div>
+          {% endif %}
+          {% if property.land_area_m2 %}
+            <div class="spec"><svg class="i" aria-hidden="true"><use href="#land"/></svg><span><b>{{ property.land_area_m2 }} m²</b>área do terreno</span></div>
+          {% endif %}
+          {% if property.lease_term_months %}
+            <div class="spec"><svg class="i" aria-hidden="true"><use href="#calendar"/></svg><span><b>{{ property.lease_term_months }} meses</b>prazo do contrato</span></div>
+          {% endif %}
+        </div>
+
+        {% if property.description %}
+          <h2 class="t-section mb-12">Sobre o imóvel</h2>
+          <p class="property-description">{{ property.description }}</p>
+        {% endif %}
+
+        <h2 class="t-section mt-32">Características</h2>
+        <ul class="feature-list">
+          {% if property.has_water_tank %}<li><svg class="i" aria-hidden="true"><use href="#water"/></svg>Tanque de água</li>{% endif %}
+          {% if property.has_generator %}<li><svg class="i" aria-hidden="true"><use href="#bolt"/></svg>Gerador</li>{% endif %}
+          {% if property.is_furnished %}<li><svg class="i" aria-hidden="true"><use href="#sofa"/></svg>Mobiliado</li>{% endif %}
+          {% if property.has_garden %}<li><svg class="i" aria-hidden="true"><use href="#home"/></svg>Quintal</li>{% endif %}
+          {% if property.has_pool %}<li><svg class="i" aria-hidden="true"><use href="#water"/></svg>Piscina</li>{% endif %}
+          {% if property.has_parking %}<li><svg class="i" aria-hidden="true"><use href="#car"/></svg>Parque de estacionamento</li>{% endif %}
+          {% if property.accepts_annual_payment %}<li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Aceita pagamento anual</li>{% endif %}
+          {% if not property.missing_verified_documents %}
+            <li><svg class="i" aria-hidden="true"><use href="#document"/></svg>Escritura e documento de identificação verificados</li>
+          {% endif %}
+        </ul>
+
+        {% if similar %}
+          <h2 class="t-section mt-32 mb-16">Imóveis semelhantes</h2>
+          <div class="grid-properties">
+            {% for item in similar %}
+              {% include "partials/property_card.html" with cover_image=item.images.first url=item.get_absolute_url %}
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+
+      <aside data-reveal="right">
+        <div class="sidebar-card">
+          <p class="detail__price">{{ property.price|kwanza }}<small>{% if property.purpose == 'RENT' %}/mês{% endif %}</small></p>
+          <p class="text-muted t-sm mt-4">
+            Referência {{ property.reference }} · publicado em {{ property.published_at|date:"d/m/Y" }}
+          </p>
+
+          {% if property.purpose == 'RENT' %}
+            <p class="text-muted t-meta">
+              Para visitar, a equipa confirma a data e a hora. A morada exacta só é prestada
+              depois de a visita estar agendada.
+            </p>
+            <a class="btn btn--primary btn--block btn--lg" href="{% url 'concierge:visit_request' property.reference %}">
+              <svg class="i" aria-hidden="true"><use href="#calendar"/></svg>
+              Pedir visita
+            </a>
+          {% else %}
+            <p class="text-muted t-meta">
+              Preços são negociados com um agente do Echilo. Envia a tua proposta e a equipa
+              responde com uma contraproposta.
+            </p>
+            <a class="btn btn--primary btn--block btn--lg" href="{% url 'concierge:offer_create' property.reference %}">
+              <svg class="i" aria-hidden="true"><use href="#document"/></svg>
+              Enviar proposta
+            </a>
+          {% endif %}
+
+          <a class="btn btn--block mt-10" href="{% url 'assistant:chamt-10">
+            <svg class="i" aria-hidden="true"><use href="#sparkle"/></svg>
+            Perguntar sobre este imóvel
+          </a>
+
+          <div class="trust-note">
+            <svg class="i i--offset" aria-hidi--offset"><use href="#shield"/></svg>
+            <span>
+              A localização foi confirmada por inspeção de satélite pela equipa do Echilo.
+              O ponto no mapa tem um raio de confiança de {{ property.location_accuracy_m|default:"—" }} metros,
+              para proteger a privacidade do proprietário.
+            </span>
+          </div>
+        </div>
+
+        <div class="sidebar-card mt-16">
+          <h3>Como funciona a visita</h3>
+          <ul class="flow flow--tight">
+            <li><span class="flow__num">1</span><div><h3>Pedido</h3><p>Escolhes a data e a hora pretendidas.</p></div></li>
+            <li><span class="flow__num">2</span><div><h3>Confirmação</h3><p>Um agente confirma por telefone ou WhatsApp.</p></div></li>
+            <li><span class="flow__num">3</span><div><h3>Visita</h3><p>Recebes a morada exacta e encontras o proprietário.</p></div></li>
+          </ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var main = document.getElementById('galeria-img');
+    if (!main) return;
+    document.querySelectorAll('.gallery__thumbs img').forEach(function (thumb) {
+      thumb.addEventListener('click', function () {
+        main.src = thumb.dataset.full;
+      });
+    });
+  })();
+</script>
+{% endblock %}

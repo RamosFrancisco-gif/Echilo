@@ -1,0 +1,28 @@
+{% load echilo_format humanize %}
+{% comment %}
+  Resultados do catálogo. É o alvo do HTMX, por isso vive isolado do formulário
+  de filtros: recebe `page_obj`, `properties` e `active_filters`.
+{% endcomment %}
+<div class="listing__bar">
+  <p class="listing__count"><b>{{ page_obj.paginator.count|intcomma }}</b> {% if page_obj.paginator.count == 1 %}imóvel encontrado{% else %}imóveis encontrados{% endif %}</p>
+  {% if filters.has_area %}
+    <p class="listing__area">
+      <span>Raio de <b>{{ filters.radius_m|distance }}</b> em torno de {{ filters.center_lat|coordinate }}, {{ filters.center_lon|coordinate }}</span>
+      <a class="listing__area-clear" href="?{{ clear_area_query }}">Limpar área</a>
+    </p>
+  {% endif %}
+</div>
+
+{% include "partials/property_grid.html" %}
+
+{% if page_obj.paginator.num_pages > 1 %}
+  <nav class="pagination" aria-label="Paginação dos imóveis">
+    {% if page_obj.has_previous %}
+      <a href="?{% for key, value in active_filters.items %}{{ key }}={{ value|urlencode }}&amp;{% endfor %}page={{ page_obj.previous_page_number }}" rel="prev">Anterior</a>
+    {% endif %}
+    <span class="is-current">{{ page_obj.number }}</span>
+    {% if page_obj.has_next %}
+      <a href="?{% for key, value in active_filters.items %}{{ key }}={{ value|urlencode }}&amp;{% endfor %}page={{ page_obj.next_page_number }}" rel="next">Seguinte</a>
+    {% endif %}
+  </nav>
+{% endif %}

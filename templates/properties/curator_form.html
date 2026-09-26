@@ -1,0 +1,117 @@
+﻿{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}{{ form_title }} — painel interno{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--curator">
+    <div class="section__head section__head--stacked" data-reveal>
+      <span class="eyebrow">Painel interno · Etapa 3</span>
+      <h2>{{ form_title }}</h2>
+      <p>{{ form_intro }}</p>
+    </div>
+
+    <div class="sidebar-card" data-reveal="scale">
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert--error" role="alert">
+            <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+            <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+          </div>
+        {% endif %}
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Proprietário</legend>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.owner_name %}
+            {% include "partials/form_field.html" with field=form.owner_phone %}
+          </div>
+          {% include "partials/form_field.html" with field=form.owner_id_number %}
+          {% include "partials/form_field.html" with field=form.submission_source %}
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Identificação</legend>
+          {% include "partials/form_field.html" with field=form.title %}
+          {% include "partials/form_field.html" with field=form.description %}
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.type %}
+            {% include "partials/form_field.html" with field=form.purpose %}
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Preço e contrato</legend>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.price %}
+            {% include "partials/form_field.html" with field=form.lease_term_months %}
+          </div>
+          <div class="field">
+            <label class="checkbox-row" for="{{ form.accepts_annual_payment.id_for_label }}">
+              {{ form.accepts_annual_payment }}
+              <span>Aceita pagamento anual</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Localização por satélite</legend>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.province_ref %}
+            {% include "partials/form_field.html" with field=form.municipality %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.locality %}
+            {% include "partials/form_field.html" with field=form.address_hint %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.latitude %}
+            {% include "partials/form_field.html" with field=form.longitude %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.location_accuracy_m %}
+            {% include "partials/form_field.html" with field=form.map_reference %}
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Características</legend>
+          <div class="grid-3">
+            {% include "partials/form_field.html" with field=form.area_m2 %}
+            {% include "partials/form_field.html" with field=form.land_area_m2 %}
+            {% include "partials/form_field.html" with field=form.bedrooms %}
+          </div>
+          <div class="grid-3">
+            {% include "partials/form_field.html" with field=form.bathrooms %}
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label class="checkbox-row" for="{{ form.has_water_tank.id_for_label }}">{{ form.has_water_tank }}<span>Tanque de água</span></label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row" for="{{ form.has_generator.id_for_label }}">{{ form.has_generator }}<span>Gerador</span></label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row" for="{{ form.is_furnished.id_for_label }}">{{ form.is_furnished }}<span>Mobilado</span></label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row" for="{{ form.has_garden.id_for_label }}">{{ form.has_garden }}<span>Quintal</span></label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row" for="{{ form.has_pool.id_for_label }}">{{ form.has_pool }}<span>Piscina</span></label>
+            </div>
+            <div class="field">
+              <label class="checkbox-row" for="{{ form.has_parking.id_for_label }}">{{ form.has_parking }}<span>Parque de estacionamento</span></label>
+            </div>
+          </div>
+        </fieldset>
+
+        <button class="btn btn--primary btn--block btn--lg" type="submit">Registar imóvel em rascunho</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

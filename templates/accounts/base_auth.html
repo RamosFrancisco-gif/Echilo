@@ -1,0 +1,88 @@
+{% load static %}<!DOCTYPE html>
+<html lang="pt-AO">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}Conta — Echilo{% endblock %}</title>
+  <meta name="description" content="{% block description %}Aceda à sua conta Echilo para pedir visitas, enviar propostas e falar com a equipa.{% endblock %}">
+  <meta name="theme-color" content="#0c0906">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&display=swap">
+  <link rel="icon" href="{% static 'img/favicon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'css/echilo.css' %}">
+  <link rel="stylesheet" href="{% static 'css/pages.css' %}">
+</head>
+<body>
+  <a class="skip-link" href="#formulario">Saltar para o formulário</a>
+
+  {% include "partials/icons.html" %}
+
+  <div class="auth">
+    <aside class="auth__aside">
+      <div>
+        <a class="logo" href="{% url 'properties:home' %}">
+          <span class="logo__text">Echi<span>lo</span></span>
+        </a>
+      </div>
+
+      <div>
+        <span class="pill">Mediação imobiliária em Angola</span>
+        <h1>Imóveis que a equipa <em>confirmou</em> antes de publicar</h1>
+        <p class="auth__lead">
+          Sem anúncios soltos. Cada imóvel passa por verificação de fotos, localização por
+          satélite e documentação legal antes de chegar a si.
+        </p>
+
+        <ul class="checklist">
+          <li><svg class="i" aria-hidden="true"><use href="#satellite"/></svg>Localização confirmada por inspecção de satélite</li>
+          <li><svg class="i" aria-hidden="true"><use href="#document"/></svg>Escritura e identificação verificadas</li>
+          <li><svg class="i" aria-hidden="true"><use href="#sparkle"/></svg>Assistente disponível 24 horas por dia</li>
+          <li><svg class="i" aria-hidden="true"><use href="#user"/></svg>Visitas e propostas tratadas por uma pessoa</li>
+        </ul>
+      </div>
+
+      <p class="auth__tagline">
+        «Fechei o contrato sem uma só surpresa. Fui avisada de cada passo.»
+        <b class="auth__brand">Cliente Echilo · Luanda</b>
+      </p>
+    </aside>
+
+    <div class="auth__form">
+      <main class="auth__main" id="formulario">
+        <div class="auth__card" data-reveal="scale">
+          <a class="auth__back" href="{% url 'properties:home' %}">
+            <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+            Voltar ao início
+          </a>
+
+          <h2>{% block heading %}{{ view_title }}{% endblock %}</h2>
+          <p>{% block subheading %}{{ view_subtitle }}{% endblock %}</p>
+
+          {% if messages %}
+            {% for message in messages %}
+              <div class="alert alert--{{ message.tags|default:'info' }}" role="status">
+                <svg class="i" aria-hidden="true"><use href="#{% if message.tags == 'error' %}alert{% else %}check{% endif %}"/></svg>
+                <span>{{ message }}</span>
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          {% block form %}{% endblock %}
+        </div>
+      </main>
+
+      <div class="auth__foot">
+        <p class="auth__tags">
+          <span>Preços em Kwanza</span>
+          <span>Luanda, Angola</span>
+          <span>Dados protegidos</span>
+        </p>
+        <p>© {% now "Y" %} Echilo</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="{% static 'js/echilo.js' %}" defer></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+﻿{% extends "base.html" %}
+{% load echilo_format %}
+
+{% block title %}Contactos — painel interno{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <div class="section__head" data-reveal>
+      <div>
+        <span class="eyebrow">Painel interno</span>
+        <h2>Fila de contactos</h2>
+        <p>Captação de proprietários e consultas de clientes, ordenadas por prioridade.</p>
+      </div>
+    </div>
+
+    <form class="chip-row" method="get">
+      <div class="field">
+        <label class="label" for="{{ form.lead_type.id_for_label }}">{{ form.lead_type.label }}</label>
+        {{ form.lead_type }}
+      </div>
+      <div class="field">
+        <label class="label" for="{{ form.status.id_for_label }}">{{ form.status.label }}</label>
+        {{ form.status }}
+      </div>
+      <button class="btn btn--primary" type="submit">Filtrar</button>
+    </form>
+
+    <div class="grid-properties grid-properties--wide">
+      {% for lead in leads %}
+        <div class="sidebar-card sidebar-card--flat" data-reveal>
+          <div class="chip-row mb-12">
+            <span class="badge {% if lead.lead_type == 'OWNER_INTAKE' %}badge--warn{% else %}badge--muted{% endif %}">
+              {{ lead.get_lead_type_display }}
+            </span>
+            <span class="badge badge--muted">{{ lead.get_status_display }}</span>
+          </div>
+          <h3 class="t-card">{{ lead.full_name }}</h3>
+          <p class="text-muted t-sm mt-4">
+            <svg class="i t-sm" aria-hidden="t-sm"><use href="#whatsapp"/></svg>
+            {{ lead.phone }}
+          </p>
+          {% if lead.purpose_interest %}
+            <p class="t-sm mt-8"><b class="text-gold">{{ lead.get_purpose_interest_display }}</b></p>
+          {% endif %}
+          {% if lead.message %}
+            <p class="text-muted t-sm mt-10">{{ lead.message|truncatechars:140 }}</p>
+          {% endif %}
+          <p class="text-muted-2 t-xs mt-12">
+            Recebido {{ lead.created_at|timesince }} atrás
+            {% if lead.assigned_to %} · atribuído a {{ lead.assigned_to.full_name }}{% endif %}
+          </p>
+        </div>
+      {% empty %}
+        <div class="empty">
+          <h3>Sem contactos nesta vista</h3>
+          <p>Ajuste os filtros ou aguarde novos formulários de adesão.</p>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

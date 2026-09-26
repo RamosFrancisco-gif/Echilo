@@ -1,0 +1,25 @@
+{% comment %}Campo de formulário com rótulo, ajuda e erros, sem repetir marcação.{% endcomment %}
+{% if field %}
+  <div class="field{% if field.errors %} has-error{% endif %}">
+    {% if field.field.widget.input_type == 'checkbox' %}
+      <label class="checkbox-row" for="{{ field.id_for_label }}">
+        {{ field }}
+        <span>{{ field.label }}</span>
+      </label>
+    {% else %}
+      <label class="label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+    {% endif %}
+
+    {% if field.help_text %}
+      <span class="field__help">{{ field.help_text }}</span>
+    {% endif %}
+
+    {% for error in field.errors %}
+      <span class="field__error" role="alert">
+        <svg class="i t-sm" aria-hidden="t-sm"><use href="#alert"/></svg>
+        {{ error }}
+      </span>
+    {% endfor %}
+  </div>
+{% endif %}
