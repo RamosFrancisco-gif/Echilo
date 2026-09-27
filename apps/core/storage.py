@@ -40,6 +40,13 @@ TRANSFORMACAO_CAPA = "c_limit,w_2000,h_2000,q_auto:good,f_jpg"
 
 FORMATOS_IMAGEM = ("jpg", "jpeg", "png", "webp")
 
+# O `accept` do input de ficheiros quer MIME types, e não extensões: o browser
+# filtra o diálogo de escolha por aquilo que o campo diz, e `accept="jpg,png"`
+# não filda nada. Vive ao lado de `FORMATOS_IMAGEM` para que os dois não
+# divirjam — o campo aceitaria um formato que o servidor recusa, e a recusa
+# chegaria depois de a pessoa já ter escolhido o ficheiro.
+MIME_IMAGEM_ACEITE = "image/jpeg,image/png,image/webp"
+
 # O §6 só aceita ficheiros de imagem. Um `.svg` é um programa que o browser
 # executa, e um `.html` servido de um domínio nosso é pior.
 EXTENSOES_IMAGEM = frozenset({".jpg", ".jpeg", ".png", ".webp"})

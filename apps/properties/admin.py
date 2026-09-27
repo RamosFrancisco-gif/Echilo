@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet
 from django.utils.html import format_html
 
 from .models import (
@@ -15,6 +16,27 @@ from .models import (
     PropertyStatusEvent,
     PropertySubmission,
 )
+from .validators import validate_photo_count
+
+
+class PropertyImageInlineFormSet(BaseInlineFormSet):
+    """Impede o tecto de quinze de ser contornado por dentro do painel.
+
+    `add_images()` tranca o imóvel e recusa o que não cabe, mas o painel não
+    passa por lá: o inline grava directamente. Sem esta conferência, a equipa
+    chega ao tecto pela ficha e a primeira fotografia a mais entra sem aviso —
+    e sem o ficheiro a ser re-codificado, que é a parte que o serviço faz.
+    """
+
+    def clean(self) -> None:
+        super().clean()
+        if any(self.errors):
+            return
+        # `total_form_count()` menos as marcadas para apagar é o número de
+        # linhas que vão existir depois do `save()`. Contar `self.forms` seria
+        # contar o que foi enviado, e um payload que não traga as fotografias
+        # que já lá estão passaria a dar um tecto que não é o tecto.
+        validate_photo_count(self.total_form_count() - len(self.deleted_forms))
 
 
 class PropertyImageInline(admin.TabularInline):
@@ -24,6 +46,7 @@ class PropertyImageInline(admin.TabularInline):
     extra = 1
     fields = ("image", "caption", "sort_order")
     ordering = ("sort_order",)
+    formset = PropertyImageInlineFormSet
 
 
 class PropertyDocumentInline(admin.TabularInline):

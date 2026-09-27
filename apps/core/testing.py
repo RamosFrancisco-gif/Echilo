@@ -148,6 +148,64 @@ def ids_dentro_de(html: str, container_id: str) -> list[str]:
     return parser.ids
 
 
+def input_names_inside(html: str, container_id: str) -> list[str]:
+    """Os `name` dos controlos de formulário dentro do elemento com este `id`.
+
+    A ficha interna tem três formulários — o de edição, o de mudança de estado e o
+    de fotografias — e a pergunta «esta página desenha o campo do formulário?» só
+    tem resposta se a leitura ficar dentro do formulário certo.
+
+    Ao contrário de `_IdsInside`, esta conta a profundidade a sério, e tem de
+    contar: `<input>` é um elemento vazio e não recebe tag de fecho, por isso
+    contar cada abertura como um nível a mais empurra o fim do formulário para
+    fora e o helper passa a devolver também os campos dos outros formulários.
+    """
+    parser = _NomesDentro(container_id)
+    parser.feed(html)
+    return parser.nomes
+
+
+class _NomesDentro(HTMLParser):
+    """Os `name` dos campos de formulário dentro de um certo contentor."""
+
+    _CAMPOS = {"input", "select", "textarea"}
+    # Elementos sem tag de fecho em HTML5. Contá-los como um nível a mais faz a
+    # profundidade derivar e o parser nunca mais sair do contentor.
+    _VAZIOS = {
+        "area", "base", "br", "col", "embed", "hr", "img",
+        "input", "link", "meta", "param", "source", "track", "wbr",
+    }
+
+    def __init__(self, container_id: str) -> None:
+        super().__init__()
+        self.alvo = container_id
+        self.profundidade = 0
+        self.nomes: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        atributos = dict(attrs)
+        if not self.profundidade:
+            if atributos.get("id") == self.alvo:
+                self.profundidade = 1
+            return
+        if tag in self._CAMPOS:
+            nome = atributos.get("name")
+            if nome:
+                self.nomes.append(nome)
+        if tag not in self._VAZIOS:
+            self.profundidade += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.profundidade and tag in self._CAMPOS:
+            nome = dict(attrs).get("name")
+            if nome:
+                self.nomes.append(nome)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.profundidade and tag not in self._VAZIOS:
+            self.profundidade -= 1
+
+
 def select_options(html: str, field_id: str) -> list[str]:
     """Os valores que um `<select>` oferece, e nada mais.
 
@@ -171,8 +229,18 @@ def jpeg_bytes(colour: tuple[int, int, int] = (40, 32, 22)) -> bytes:
     return solid_colour_jpeg(colour)
 
 
-def make_image(prop: Property, *, caption: str = "Sala") -> PropertyImage:
-    """Anexa uma fotografia válida, mínima, para satisfazer a regra da capa."""
+def make_image(
+    prop: Property, *, caption: str = "Sala", sort_order: int | None = None
+) -> PropertyImage:
+    """Anexa uma fotografia válida, mínima, para satisfazer a regra da capa.
+
+    A ordem por omissão é a seguinte livre, e não zero. Fixar em zero fazia
+    quinze chamadas criarem quinze fotografias com o mesmo número, o que não
+    estraga a contagem — e por isso mesmo passava despercebido — mas deixa a
+    capa indefinida em qualquer teste que use a ordem.
+    """
+    if sort_order is None:
+        sort_order = prop.images.count()
     return PropertyImage.objects.create(
         property=prop,
         image=SimpleUploadedFile(
@@ -181,7 +249,7 @@ def make_image(prop: Property, *, caption: str = "Sala") -> PropertyImage:
             content_type="image/jpeg",
         ),
         caption=caption,
-        sort_order=0,
+        sort_order=sort_order,
     )
 
 

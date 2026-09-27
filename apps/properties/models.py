@@ -15,6 +15,7 @@ from apps.core.storage import storage_documentacao
 from apps.core.validators import validate_angolan_phone
 
 from .reference import ANGOLA_PROVINCES, municipalities_for
+from .validators import MIN_FOTOS
 
 
 class OwnerProfile(models.Model):
@@ -463,18 +464,32 @@ class DocumentAccessLog(models.Model):
     isso a coluna é um endereço de rede validado e não texto livre: um `X-Forwarded-For`
     escrito à mão tem de ser recusado.
 
-    O registo não se apaga com o documento. Com `CASCADE`, apagar um ficheiro
-    levava consigo a prova de quem o tinha lido, e o ficheiro é precisamente o
-    que se pode querer apagar depois de um imóvel sair do catálogo: o `PROTECT`
-    obriga a uma decisão explícita, e a decisão fica escrita.
+    O registo não se apaga com o documento, e a forma de o garantir já não é o
+    `PROTECT`: passou a ser um retrato. A FK pode ficar vazia e o acesso guarda
+    uma cópia de `property_reference`, `document_type` e `file_name`, escrita em
+    `save()`. O `PROTECT` obrigava a uma decisão explícita — e a decisão que
+    acabámos por tomar é que o administrador pode apagar o imóvel, o que um
+    `PROTECT` tornava impossível. Um retrato resolve as duas coisas: o ficheiro
+    some, que é o que se quer ao apagar, e a prova de quem o leu fica, que é o que
+    o §6 pede. O que se perde é o documento em si, não o registo de o ter lido.
     """
 
     document = models.ForeignKey(
         PropertyDocument,
         verbose_name="documento",
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         related_name="access_logs",
+        null=True,
+        blank=True,
     )
+    property_reference = models.CharField(
+        "referência do imóvel",
+        max_length=32,
+        blank=True,
+        db_index=True,
+    )
+    document_type = models.CharField("tipo de documento", max_length=32, blank=True)
+    file_name = models.CharField("ficheiro", max_length=255, blank=True)
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         verbose_name="aberto por",
@@ -491,7 +506,61 @@ class DocumentAccessLog(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self) -> str:
-        return f"{self.actor}: {self.document}"
+        if self.document_id and self.document:
+            return f"{self.actor}: {self.document}"
+        alvo = self.file_name or self.property_reference or "documento removido"
+        return f"{self.actor}: {alvo}"
+
+    def save(self, *args: object, **kwargs: object) -> None:
+        """Tira o retrato do documento enquanto ele ainda existe.
+
+        Preencher aqui e não na vista é o que garante que o registo fica completo
+        em qualquer caminho de escrita. A linha nasce com o retrato já copiado, e
+        quando o documento for apagado a prova de quem o leu não perde o nome do
+        ficheiro nem a referência do imóvel.
+        """
+        if self.document_id and not self.property_reference:
+            documento = self.document
+            if documento is not None:
+                self.property_reference = documento.property.reference
+                self.document_type = documento.document_type
+                self.file_name = str(documento.file.name or "")
+        super().save(*args, **kwargs)
+
+
+class PropertyDeletion(models.Model):
+    """Registo de cada imóvel apagado, porque o apagamento não tem volta.
+
+    `PropertyStatusEvent` não serve: ele é filho do imóvel e vai com ele, que é
+    exactamente o que acontece a uma fotografia de capa quando se apaga o
+    imóvel. O histórico de estados é a memória do imóvel e some com ele; este é
+    o registo de que o imóvel existiu e de quem o mandou apagar, e sobrevive
+    porque não tem chave estrangeira para o imóvel — só o texto da referência.
+
+    A razão é obrigatória e não é um campo de cortesia: um imóvel apagado sem
+    explicação é indistinguível de um imóvel apagado por engano, e a diferença é
+    a única coisa que interessa quando alguém perguntar por ele seis meses depois.
+    """
+
+    reference = models.CharField("referência", max_length=32, db_index=True)
+    title = models.CharField("título", max_length=200)
+    status_at_deletion = models.CharField("estado", max_length=24)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="apagado por",
+        on_delete=models.PROTECT,
+        related_name="property_deletions",
+    )
+    reason = models.TextField("motivo")
+    created_at = models.DateTimeField("apagado em", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "imóvel apagado"
+        verbose_name_plural = "imóveis apagados"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.reference}: {self.title}"
 
 
 class PropertySubmission(models.Model):
@@ -553,7 +622,7 @@ class PropertySubmission(models.Model):
                 self.owner_id_confirmed,
             )
         )
-        media_ok = prop.images.count() >= 5
+        media_ok = prop.images.count() >= MIN_FOTOS
         coordinates_ok = prop.latitude is not None and prop.longitude is not None
         price_ok = prop.price is not None and prop.price > 0
         owner_ok = bool(prop.owner_id and prop.owner.phone)
@@ -563,8 +632,8 @@ class PropertySubmission(models.Model):
         """Descreve, em linguagem de equipa, o que ainda falta na triagem."""
         missing: list[str] = []
         prop = self.property
-        if prop.images.count() < 5:
-            missing.append("Fotografias (mínimo de 5)")
+        if prop.images.count() < MIN_FOTOS:
+            missing.append(f"Fotografias (mínimo de {MIN_FOTOS})")
         if prop.latitude is None or prop.longitude is None:
             missing.append("Coordenadas no mapa")
         elif not prop.location_verified_at:

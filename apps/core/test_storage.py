@@ -14,7 +14,6 @@ from unittest import mock
 from django.contrib import admin
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import FileSystemStorage
-from django.db.models.deletion import ProtectedError
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
@@ -303,7 +302,7 @@ class EntregaAssinadaTests(_DocumentoParaAuditar):
 
 
 class RegistoDeAuditoriaTests(_DocumentoParaAuditar):
-    """O `PROTECT` do registo, e a imutabilidade dele no painel (§6)."""
+    """A prova sobrevive ao ficheiro, e a imutabilidade dela no painel (§6)."""
 
     def test_apagar_o_documento_nao_apaga_a_prova_de_quem_o_leu(self) -> None:
         """O ficheiro pode sair; a leitura fica.
@@ -311,20 +310,35 @@ class RegistoDeAuditoriaTests(_DocumentoParaAuditar):
         Um imóvel arquivado continua a ter uma escritura que alguém abriu. Com
         `CASCADE`, apagar o ficheiro levava o registo junto e a pergunta "quem
         leu isto em Março" ficava sem resposta — que era o que o registo existia
-        para responder.
+        para responder. O `SET_NULL` desliga a linha do documento em vez de a
+        apagar, e o retrato escrito na altura da leitura é o que sobra.
         """
         self._abrir(self.agente)
         self.assertEqual(DocumentAccessLog.objects.count(), 1)
-        with self.assertRaises(ProtectedError):
-            self.documento.delete()
 
-    def test_a_prova_continua_la_depois_da_tentativa(self) -> None:
-        """O `PROTECT` recusa e o registo fica intacto."""
-        self._abrir(self.agente)
-        with self.assertRaises(ProtectedError):
-            self.documento.delete()
+        self.documento.delete()
+
         self.assertEqual(DocumentAccessLog.objects.count(), 1)
-        self.assertTrue(PropertyDocument.objects.filter(pk=self.documento.pk).exists())
+
+    def test_a_prova_continua_la_depois_da_apagagem(self) -> None:
+        """Sem documento ligado, a linha ainda diz o que foi lido e por quem.
+
+        Um `SET_NULL` que esvaziasse a referência deixaria a prova órfã: o
+        registo sobrevivia e não contava nada. É para isso que a referência, o
+        tipo e o nome do ficheiro são copiados para a própria linha no momento
+        do acesso.
+        """
+        self._abrir(self.agente)
+        self.documento.delete()
+
+        registo = DocumentAccessLog.objects.get()
+        self.assertIsNone(registo.document_id)
+        self.assertEqual(registo.actor, self.agente)
+        self.assertEqual(registo.property_reference, self.imóvel.reference)
+        self.assertEqual(
+            registo.document_type, PropertyDocument.DocumentType.OWNERSHIP_TITLE
+        )
+        self.assertEqual(registo.file_name, self.IDENTIFICADOR)
 
     def test_o_registo_nao_se_escreve_a_mao_no_painel(self) -> None:
         """Um acesso é o que a aplicação registou, não o que alguém inventa."""

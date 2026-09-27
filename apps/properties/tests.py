@@ -4,22 +4,29 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs
 
 from django.conf import settings
+from django.contrib.messages import get_messages
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.forms.formsets import BaseFormSet
+from django.forms.models import inlineformset_factory as admin_formset_factory
+from django.http import HttpResponse
 from django.templatetags.static import static
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from apps.core.geo import haversine_metres
+from apps.core.templatetags.echilo_format import coordinate
 from apps.core.testing import (
     ids_dentro_de,
+    input_names_inside,
     jpeg_bytes,
     make_image,
     make_owner,
@@ -29,6 +36,11 @@ from apps.core.testing import (
     make_verified_documents,
 )
 from apps.core.validators import MAX_SEARCH_RADIUS_M
+from apps.properties.forms import (
+    PropertyCuratorForm,
+    PropertyImageUploadForm,
+    PropertyQuickEditForm,
+)
 from apps.properties.management.commands.build_admin_boundaries import (
     FICHEIRO_MUNICIPIOS,
     FICHEIRO_PROVINCIAS,
@@ -40,7 +52,14 @@ from apps.properties.management.commands.build_admin_boundaries import (
     sem_acentos,
     variantes,
 )
-from apps.properties.models import Property, PropertyStatusEvent
+from apps.properties.models import (
+    DocumentAccessLog,
+    Property,
+    PropertyDeletion,
+    PropertyDocument,
+    PropertyImage,
+    PropertyStatusEvent,
+)
 from apps.properties.reference import (
     ALL_MUNICIPALITIES,
     ANGOLA_PROVINCES,
@@ -49,7 +68,9 @@ from apps.properties.reference import (
     provinces_without_boundary,
 )
 from apps.properties.selectors import PropertyFilters, PropertyQueryService
-from apps.properties.services import build_map_payload
+from apps.properties.admin import PropertyImageInlineFormSet
+from apps.properties.services import add_images, build_map_payload
+from apps.properties.validators import MAX_FOTOS, MIN_FOTOS
 
 
 class PropertyPublicationTests(TestCase):
@@ -380,6 +401,63 @@ class CuratorActionTests(TestCase):
         self.prop.refresh_from_db()
         self.assertEqual(self.prop.status, Property.Status.UNDER_VALIDATION)
 
+    def test_a_transicao_recusada_diz_o_que_e_que_falta(self) -> None:
+        """«Não foi aplicada» sem mais não é resposta, é uma porta fechada.
+
+        Publicar ou arquivar sem justificação é a recusa mais fácil de tropeçar: o
+        campo da justificação não é obrigatório no HTML, o aviso vive num
+        `placeholder` e o estado escolhido é muitas vezes o único oferecido. A
+        vista escrevia a recusa genérica e deitava fora o erro do formulário, que
+        era onde a resposta estava. Quem lia isso sabia que tinha havido um erro e
+        não sabia o que fazer — e a justificação escrita perdia-se no
+        redireccionamento, à mesma.
+        """
+        self.client.force_login(self.curator)
+
+        response = self.client.post(
+            self.transition_url, {"to_status": Property.Status.PUBLISHED, "reason": ""}
+        )
+
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.status, Property.Status.UNDER_VALIDATION)
+        mensagens = self._mensagens(response)
+        with self.subTest(mensagens=mensagens):
+            self.assertTrue(
+                any("justifica" in mensagem.lower() for mensagem in mensagens), mensagens
+            )
+
+    def test_a_justificacao_escreve_se_antes_de_o_browser_a_pedir(self) -> None:
+        """O `required` no HTML tem de ser verdade para todos os estados oferecidos.
+
+        A regra dos dois lados: o browser não pode recusar um pedido que o
+        servidor aceitaria, e o servidor não pode recusar um pedido que o browser
+        deixou passar. Publicar e arquivar exigem justificação e os restantes
+        estados não, por isso o atributo só entra quando não há nenhum estado
+        oferecido que dispensasse — que é o caso de um imóvel publicado, onde a
+        única saída é o arquivo, e o erro que daí vinha não dizia o que faltava.
+        """
+        self.client.force_login(self.curator)
+        for estado, exigido in (
+            (Property.Status.PUBLISHED, True),
+            (Property.Status.UNDER_VALIDATION, False),
+        ):
+            with self.subTest(estado=estado):
+                imovel = make_property(
+                    curator=self.curator,
+                    owner=self.owner,
+                    status=estado,
+                    title="Casa para %s" % estado,
+                )
+                html = self.client.get(
+                    reverse("properties:curator_detail", args=[imovel.reference])
+                ).content.decode("utf-8")
+                linha = next(
+                    (candidate for candidate in html.splitlines() if 'name="reason"' in candidate),
+                    "",
+                )
+                self.assertTrue(linha, "a ficha não desenha o campo da justificação")
+                self.assertEqual(exigido, "required" in linha, linha)
+
     def test_valid_transition_is_recorded(self) -> None:
         """Uma transição válida muda o estado e deixa rasto no histórico."""
         for index in range(5):
@@ -449,30 +527,74 @@ class CuratorActionTests(TestCase):
 
         self.assertRedirects(response, self.detail_url)
 
+    def _carrega(self, *ficheiros: SimpleUploadedFile, follow: bool = False) -> HttpResponse:
+        """Carrega um lote pela mesma rota que a ficha usa."""
+        return self.client.post(
+            self.images_url, {"images": list(ficheiros)}, follow=follow
+        )
+
+    def _mensagens(self, response: HttpResponse) -> list[str]:
+        """Lê o que a ficha disse à equipa.
+
+        Vem de `response.wsgi_request` e não de `self.client`: as mensagens são
+        postas no pedido pelo `MessageMiddleware`, e o cliente de testes não é um
+        pedido. Nenhum teste do projecto lia mensagens antes destes, e é
+        por isso que um formulário que respondia "campo obrigatório" para
+        sempre passou durante meses: o que a pessoa lia não era testado.
+        """
+        return [str(mensagem) for mensagem in get_messages(response.wsgi_request)]
+
+    def _jpg(self, nome: str) -> SimpleUploadedFile:
+        return SimpleUploadedFile(nome, jpeg_bytes(), content_type="image/jpeg")
+
     def test_image_upload_becomes_the_cover(self) -> None:
         """A primeira fotografia carregada é a capa (§2.1)."""
         self.client.force_login(self.curator)
 
-        response = self.client.post(
-            self.images_url,
-            {"image": SimpleUploadedFile("capa.jpg", jpeg_bytes(), content_type="image/jpeg")},
-        )
+        response = self._carrega(self._jpg("capa.jpg"))
 
         self.assertEqual(response.status_code, 302)
         image = self.prop.images.get()
         self.assertEqual(image.sort_order, 0)
 
+    def test_o_lote_entra_na_ordem_escolhida(self) -> None:
+        """Várias de uma vez, e pela ordem que a pessoa viu no ecrã.
+
+        A ordem de escolha é a ordem de fotografar, e é a que decide a capa. O
+        nome guardado não é o enviado: o storage acrescenta um sufixo para
+        duas fotografias com o mesmo nome não se sobrescrevessem, e comparar
+        o nome inteiro seria testar o storage em vez da ordem.
+        """
+        self.client.force_login(self.curator)
+
+        self._carrega(self._jpg("a.jpg"), self._jpg("b.jpg"), self._jpg("c.jpg"))
+
+        guardados = [
+            Path(image.image.name).stem
+            for image in self.prop.images.order_by("sort_order")
+        ]
+        for esperado, guardado in zip(["a", "b", "c"], guardados):
+            self.assertTrue(
+                guardado.startswith(esperado),
+                f"esperava {esperado}* em {guardados}, veio {guardado}",
+            )
+
+    def test_o_lote_continua_depois_das_que_ja_existiam(self) -> None:
+        """As fotografias do lote entram a seguir às que lá estavam, sem cobrir nada."""
+        self.client.force_login(self.curator)
+        make_image(self.prop, caption="Ja existente")
+
+        self._carrega(self._jpg("nova.jpg"))
+
+        self.assertEqual(
+            sorted(image.sort_order for image in self.prop.images.all()), [0, 1]
+        )
+
     def test_second_upload_keeps_the_cover(self) -> None:
         """Uma segunda fotografia não rouba a capa."""
         self.client.force_login(self.curator)
-        self.client.post(
-            self.images_url,
-            {"image": SimpleUploadedFile("capa.jpg", jpeg_bytes(), content_type="image/jpeg")},
-        )
-        self.client.post(
-            self.images_url,
-            {"image": SimpleUploadedFile("segunda.jpg", jpeg_bytes(), content_type="image/jpeg")},
-        )
+        self._carrega(self._jpg("capa.jpg"))
+        self._carrega(self._jpg("segunda.jpg"))
 
         images = list(self.prop.images.order_by("sort_order"))
         self.assertEqual([image.sort_order for image in images], [0, 1])
@@ -481,25 +603,1351 @@ class CuratorActionTests(TestCase):
         """Um ficheiro que não é imagem não entra na galeria."""
         self.client.force_login(self.curator)
 
-        self.client.post(
-            self.images_url,
-            {"image": SimpleUploadedFile("nota.pdf", b"%PDF-1.4", content_type="application/pdf")},
+        self._carrega(
+            SimpleUploadedFile("nota.pdf", b"%PDF-1.4", content_type="application/pdf")
         )
 
         self.assertEqual(self.prop.images.count(), 0)
 
-    def test_upload_is_capped_at_thirty_photos(self) -> None:
-        """Acima de trinta fotografias o formulário recusa (§2.1)."""
-        self.client.force_login(self.curator)
-        for index in range(30):
-            make_image(self.prop, caption=f"Foto {index}")
+    def test_um_lote_com_uma_ficheiro_mau_guarda_o_resto(self) -> None:
+        """Um PDF no meio de doze fotografias não leva as onze boas com ele.
 
-        self.client.post(
-            self.images_url,
-            {"image": SimpleUploadedFile("extra.jpg", jpeg_bytes(), content_type="image/jpeg")},
+        A equipa fotografa o imóvel inteiro e escolhe tudo de uma vez. Se um
+        ficheiro estiver mal, o que ela espera é gravar os outros e saber qual
+        foi recusado — não um "guardadas" que não é verdade.
+        """
+        self.client.force_login(self.curator)
+
+        self._carrega(
+            self._jpg("boa-1.jpg"),
+            SimpleUploadedFile("nota.pdf", b"%PDF-1.4", content_type="application/pdf"),
+            self._jpg("boa-2.jpg"),
         )
 
-        self.assertEqual(self.prop.images.count(), 30)
+        self.assertEqual(self.prop.images.count(), 2)
+
+    def test_o_lote_diz_qual_ficheiro_foi_recusado(self) -> None:
+        """A recusa diz o nome do ficheiro, não só que algo correu mal."""
+        self.client.force_login(self.curator)
+
+        response = self._carrega(
+            self._jpg("boa.jpg"),
+            SimpleUploadedFile("nota.pdf", b"%PDF-1.4", content_type="application/pdf"),
+            follow=True,
+        )
+
+        recusas = self._mensagens(response)
+        self.assertTrue(any("nota.pdf" in recusa for recusa in recusas), recusas)
+
+    def test_upload_is_capped_at_fifteen_photos(self) -> None:
+        """Acima de quinze fotografias o imóvel não aceita mais nenhuma (§2.1)."""
+        self.client.force_login(self.curator)
+        for index in range(MAX_FOTOS):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        self._carrega(self._jpg("extra.jpg"))
+
+        self.assertEqual(self.prop.images.count(), MAX_FOTOS)
+
+    def test_o_imovel_ninguem_enche_a_mesma_hora(self) -> None:
+        """Dois carregamentos ao mesmo tempo não dão dezasseis fotografias.
+
+        A vista lê a contagem, monta o formulário e grava; entre a leitura e a
+        gravação cabe outro pedido. Se o serviço não trancar o imóvel, os dois
+        veem catorze livres e escrevem um cada um.
+        """
+        for index in range(MAX_FOTOS - 1):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        primeira, fora_1 = add_images(prop=self.prop, images=[self._jpg("a.jpg")])
+        segunda, fora_2 = add_images(prop=self.prop, images=[self._jpg("b.jpg")])
+
+        self.assertEqual(len(primeira), 1)
+        self.assertEqual(fora_1, 0)
+        self.assertEqual(len(segunda), 0, "o segundo lote entrou por cima do tecto")
+        self.assertEqual(fora_2, 1, "o segundo lote não disse que não coube")
+        self.assertEqual(self.prop.images.count(), MAX_FOTOS)
+
+    def test_o_servico_diz_o_que_entrou_e_o_que_ficou_de_fora(self) -> None:
+        """Quem chama o serviço precisa dos dois números, não só do que entrou."""
+        for index in range(MAX_FOTOS - 2):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        guardadas, descartadas = add_images(
+            prop=self.prop, images=[self._jpg(f"nova-{i}.jpg") for i in range(5)]
+        )
+
+        self.assertEqual(len(guardadas), 2)
+        self.assertEqual(descartadas, 3)
+        self.assertEqual(
+            sorted(foto.sort_order for foto in self.prop.images.all()),
+            list(range(MAX_FOTOS)),
+            "a numeração ficou com um buraco ou uma repetição",
+        )
+
+    def test_o_painel_nao_deixa_passar_de_cinco(self) -> None:
+        """O painel tem o seu caminho de gravação e também tem de contar.
+
+        `add_images()` tranca o imóvel, mas o inline do admin grava directamente.
+        Um tecto que a equipa contorna por dentro não é um tecto.
+        """
+        for index in range(MAX_FOTOS):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        formset = self._formset_de_fotografias()
+
+        self.assertFalse(formset.is_valid())
+        self.assertIn("não pode ter mais de", str(formset.non_form_errors()))
+
+    def test_o_painel_aceita_a_fotografia_faltando_uma(self) -> None:
+        """A defesa que recusa tudo não é uma defesa, é uma parede.
+
+        O mesmo inline com catorze fotografias tem de aceitar a Décima quinta.
+        """
+        for index in range(MAX_FOTOS - 1):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        self.assertTrue(self._formset_de_fotografias().is_valid())
+
+    def test_o_painel_conta_a_apagada_como_casa_ocupada(self) -> None:
+        """Apagar uma e pôr outra no mesmo pedido não pode dar dezasseis.
+
+        O `DELETE` tem de sair da conta: sem isso, um imóvel cheio nunca aceita
+        trocar uma fotografia, e a equipa acaba a apagar num pedido e a carregar
+        noutro só para conseguir corrigir uma imagem.
+        """
+        for index in range(MAX_FOTOS):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        formset = self._formset_de_fotografias(apagar_a_ultima=True)
+
+        self.assertTrue(formset.is_valid())
+
+    @override_settings(MANAGER_EMAILS=["gestor@echilo.ao"])
+    def test_a_ficha_do_painel_usa_a_defesa_do_tecto(self) -> None:
+        """Uma defesa que ninguém liga não defendem nada.
+
+        O formset acima é testado isolado, e um formset isolado que ninguém
+        atribui a nada é uma classe deitada fora. Este é o teste que diz que a
+        ficha do painel passa mesmo por ela.
+        """
+        gestor = make_user(email="gestor@echilo.ao")
+        self.client.force_login(gestor)
+
+        response = self.client.get(
+            f"/admin/properties/property/{self.prop.pk}/change/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        formsets = response.context["inline_admin_formsets"]
+        # O painel não usa a classe tal e qual: embrulha-a numa subclasse gerada
+        # que sabe construir os formulários. O que interessa é que a defence
+        # esteja na linhagem.
+        tipos = [formset.formset.__class__ for formset in formsets]
+        self.assertTrue(
+            any(issubclass(tipo, PropertyImageInlineFormSet) for tipo in tipos),
+            tipos,
+        )
+
+    def _formset_de_fotografias(self, *, apagar_a_ultima: bool = False) -> BaseFormSet:
+        """Monta o mesmo formset que o inline do admin usa, com uma foto nova.
+
+        O payload é o que o painel mandaria de facto: as fotografias que já lá
+        estão como formulários iniciais, mais a nova que a equipa está a juntar.
+        """
+        formset_class = admin_formset_factory(
+            Property,
+            PropertyImage,
+            formset=PropertyImageInlineFormSet,
+            extra=1,
+            fields=("image", "caption", "sort_order"),
+        )
+        prefixo = formset_class.get_default_prefix()
+        existentes = list(self.prop.images.order_by("sort_order"))
+        data = {
+            f"{prefixo}-TOTAL_FORMS": str(len(existentes) + 1),
+            f"{prefixo}-INITIAL_FORMS": str(len(existentes)),
+            f"{prefixo}-MIN_NUM_FORMS": "0",
+            f"{prefixo}-MAX_NUM_FORMS": "1000",
+        }
+        for indice, foto in enumerate(existentes):
+            data[f"{prefixo}-{indice}-id"] = str(foto.pk)
+            data[f"{prefixo}-{indice}-caption"] = foto.caption or ""
+            data[f"{prefixo}-{indice}-sort_order"] = str(foto.sort_order)
+        if apagar_a_ultima:
+            data[f"{prefixo}-{len(existentes) - 1}-DELETE"] = "on"
+        data[f"{prefixo}-{len(existentes)}-caption"] = "A nova"
+        data[f"{prefixo}-{len(existentes)}-sort_order"] = str(MAX_FOTOS)
+        return formset_class(
+            instance=self.prop,
+            data=data,
+            files={f"{prefixo}-{len(existentes)}-image": self._jpg("nova.jpg")},
+        )
+
+    def test_o_excesso_do_lote_e_dito_e_nao_ignorado(self) -> None:
+        """Escolher vinte com cinco lá dentro guarda cinco e diz que não couberam todos.
+
+        Recusar o lote inteiro obriga a pessoa a contar o que já tinha; guardar
+        em silêncio faz o mesmo estrago com menos trabalho da parte dela.
+        """
+        self.client.force_login(self.curator)
+        for index in range(12):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        response = self._carrega(
+            *(self._jpg(f"nova-{i}.jpg") for i in range(8)), follow=True
+        )
+
+        self.assertEqual(self.prop.images.count(), MAX_FOTOS)
+        avisos = self._mensagens(response)
+        self.assertTrue(
+            any("5" in aviso and "limite" in aviso for aviso in avisos), avisos
+        )
+
+    def test_a_ficha_diz_que_ja_nao_cabe_mais(self) -> None:
+        """Com o tecto cheio, a ficha esconde o formulário e diz porquê.
+
+        Um formulário que recusa sem explicar obriga a pessoa a carregar quinze
+        fotografias para as ver recusadas.
+        """
+        self.client.force_login(self.curator)
+        for index in range(MAX_FOTOS):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        html = self.client.get(self.detail_url).content.decode()
+
+        self.assertNotIn('name="images"', html)
+        self.assertIn(f"as {MAX_FOTOS} fotografias", html)
+
+    def test_a_ficha_anuncia_o_espaco_que_resta(self) -> None:
+        """A ficha diz quantas cabem antes de a pessoa escolher os ficheiros."""
+        self.client.force_login(self.curator)
+        for index in range(10):
+            make_image(self.prop, caption=f"Foto {index}")
+
+        html = self.client.get(self.detail_url).content.decode()
+
+        self.assertIn(f"até {MAX_FOTOS - 10} de uma vez", html)
+
+    def test_o_input_da_ficha_tem_o_nome_que_o_formulario_espera(self) -> None:
+        """O `name` do input é o mesmo que a view lê, senão nada entra.
+
+        Um `name` e um campo de formulário que não coincidem não dão erro: o
+        pedido chega, o campo é obrigatório, e a ficha devolve "campo
+        obrigatório" para sempre. É o que acontecia com `foto` contra `image`.
+        """
+        self.client.force_login(self.curator)
+
+        nomes = self._inputs_de_fotografias()
+
+        self.assertIn("images", nomes)
+        self.assertNotIn("foto", nomes)
+        self.assertEqual(nomes.count("images"), 1)
+
+    def _inputs_de_fotografias(self) -> list[str]:
+        """Os `name` dos inputs de ficheiro que a ficha desenha."""
+        html = self.client.get(self.detail_url).content.decode()
+        return re.findall(
+            r'<input[^>]*type="file"[^>]*name="([^"]+)"', html
+        )
+
+    def test_o_input_da_ficha_aceita_varias(self) -> None:
+        """O input é `multiple`, senão o browser deixa escolher uma só."""
+        self.client.force_login(self.curator)
+
+        html = self.client.get(self.detail_url).content.decode()
+
+        self.assertRegex(html, r'<input[^>]*type="file"[^>]*multiple')
+
+    def test_o_input_da_ficha_diz_os_mesmos_formatos_que_o_formulario_aceita(self) -> None:
+        """O `accept` do input e o do formulário dizem a mesma coisa.
+
+        Escritos à mão, o input passa a oferecer um formato que o servidor
+        recusa, e a pessoa só descobre depois de escolher o ficheiro.
+        """
+        self.client.force_login(self.curator)
+
+        html = self.client.get(self.detail_url).content.decode()
+        no_input = re.search(r'<input[^>]*type="file"[^>]*accept="([^"]+)"', html)
+
+        self.assertIsNotNone(no_input)
+        form = PropertyImageUploadForm()
+        self.assertEqual(no_input.group(1), form.fields["images"].widget.attrs["accept"])
+
+    def test_a_ficha_oferece_a_apagar_cada_fotografia(self) -> None:
+        """Sem botão de apagar, um tecto de quinze é um muro sem volta."""
+        self.client.force_login(self.curator)
+        fotografia = make_image(self.prop, caption="Errada")
+
+        html = self.client.get(self.detail_url).content.decode()
+
+        self.assertIn(
+            reverse(
+                "properties:curator_image_delete",
+                args=[self.prop.reference, fotografia.id],
+            ),
+            html,
+        )
+        self.assertIn("data-confirmar=", html)
+
+    def test_a_confirmacao_diz_se_a_capa_muda_ou_nao(self) -> None:
+        """Um texto único para as duas não é um texto, é uma adivinhação.
+
+        Apagar a capa promove a seguinte e apagar uma foto do meio não toca na
+        capa. Dizer "a capa passa a ser a seguinte" nas duas é uma das duas
+        coisas errada, e a pessoa não tem como saber qual.
+        """
+        self.client.force_login(self.curator)
+        make_image(self.prop, caption="Capa")
+        make_image(self.prop, caption="Segunda")
+
+        html = self.client.get(self.detail_url).content.decode()
+        confirmar = re.findall(r'data-confirmar="([^"]+)"', html)
+
+        self.assertEqual(len(confirmar), 2, confirmar)
+        self.assertIn("passa a ser a capa", confirmar[0])
+        self.assertIn("não muda", confirmar[1])
+
+    def test_apagar_a_fotografia_tira_a_linha_da_galeria(self) -> None:
+        self.client.force_login(self.curator)
+        fotografia = make_image(self.prop, caption="Errada")
+
+        response = self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, fotografia.id])
+        )
+
+        self.assertRedirects(
+            response, f"{self.detail_url}#fotografias", fetch_redirect_response=False
+        )
+        self.assertFalse(PropertyImage.objects.filter(pk=fotografia.pk).exists())
+
+    def test_apagar_a_capa_passa_a_capa_a_seguinte(self) -> None:
+        """Apagar a primeira tem de promover a segunda, senão a ficha fica sem capa.
+
+        A capa é a fotografia de `sort_order` zero. Sem a renomear, o catálogo
+        passava a mostrar a segunda fotografia como se fosse a primeira.
+        """
+        self.client.force_login(self.curator)
+        capa = make_image(self.prop, caption="Capa")
+        segunda = make_image(self.prop, caption="Segunda")
+
+        self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, capa.id])
+        )
+
+        segunda.refresh_from_db()
+        self.assertEqual(segunda.sort_order, 0)
+
+    def test_apagar_uma_fotografia_do_meio_fecha_a_numeracao(self) -> None:
+        """O buraco só aparece quando se apaga do meio, e aí é que dói.
+
+        Com a capa, o `sort_order` 0 some e a renumeração é óbvia. Apagando a
+        segunda de três, o que fica é 0 e 2: a próxima fotografia carregada
+        entra com o 2 que já está ocupado, e a capa passa a ser a imagem
+        errada. Só um teste que apaga do meio é que apanha isto.
+        """
+        self.client.force_login(self.curator)
+        make_image(self.prop, caption="Primeira")
+        do_meio = make_image(self.prop, caption="Do meio")
+        make_image(self.prop, caption="Ultima")
+
+        self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, do_meio.id])
+        )
+
+        ordens = list(
+            PropertyImage.objects.filter(property=self.prop)
+            .order_by("sort_order")
+            .values_list("sort_order", flat=True)
+        )
+        self.assertEqual(ordens, [0, 1])
+
+    def test_a_fotografia_seguinte_da_apagada_nao_pisa_a_numeracao(self) -> None:
+        """O ciclo completo: apagar ao meio e carregar outra vez tem de ficar sequencial."""
+        self.client.force_login(self.curator)
+        make_image(self.prop, caption="Primeira")
+        do_meio = make_image(self.prop, caption="Do meio")
+        make_image(self.prop, caption="Ultima")
+
+        self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, do_meio.id])
+        )
+        self.client.post(
+            reverse("properties:curator_images", args=[self.prop.reference]),
+            {"images": [self._jpg("nova.jpg")]},
+        )
+
+        ordens = list(
+            PropertyImage.objects.filter(property=self.prop)
+            .order_by("sort_order")
+            .values_list("sort_order", flat=True)
+        )
+        self.assertEqual(ordens, [0, 1, 2])
+
+    def test_apagar_a_capa_diz_que_a_capa_mudou(self) -> None:
+        """A ficha avisa que a capa deixou de ser a que estava."""
+        self.client.force_login(self.curator)
+        capa = make_image(self.prop, caption="Capa")
+        make_image(self.prop, caption="Segunda")
+
+        response = self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, capa.id]),
+            follow=True,
+        )
+
+        mensagens = self._mensagens(response)
+        self.assertTrue(
+            any("capa" in mensagem.lower() for mensagem in mensagens), mensagens
+        )
+
+    def test_apagar_a_fotografia_apaga_o_ficheiro_com_ela(self) -> None:
+        """O ficheiro vai para o lixo com a linha.
+
+        `Model.delete()` não toca em armazenamento, e uma fotografia órfã na
+        Cloudinary continua lá a ser paga todos os meses por alguém que já a
+        apagou.
+        """
+        self.client.force_login(self.curator)
+        fotografia = make_image(self.prop, caption="A apagar")
+        caminho = fotografia.image.path
+
+        self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, fotografia.id])
+        )
+
+        self.assertFalse(os.path.exists(caminho), f"{caminho} ficou no storage")
+
+    def test_nao_se_apaga_a_fotografia_de_outro_imovel(self) -> None:
+        """A fotografia tem de ser deste imóvel, ou o `id` apaga o que calha.
+
+        A rota traz a referência do imóvel e o id da fotografia. Ignorar a
+        referência dava a quem tenha um id válido a capacidade de apagar a
+        fotografia de um imóvel que não está a ver.
+        """
+        self.client.force_login(self.curator)
+        outro = make_property(
+            curator=self.curator, owner=self.owner, status=Property.Status.DRAFT
+        )
+        alheia = make_image(outro, caption="De outro imovel")
+
+        response = self.client.post(
+            reverse(
+                "properties:curator_image_delete", args=[self.prop.reference, alheia.id]
+            )
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(PropertyImage.objects.filter(pk=alheia.pk).exists())
+
+    def test_apagar_fotografia_exige_equipa(self) -> None:
+        """Um cliente autenticado não apaga fotografias."""
+        cliente = make_user(role="CLIENT", email="cliente@echilo.ao")
+        fotografia = make_image(self.prop, caption="Intocavel")
+        self.client.force_login(cliente)
+
+        response = self.client.post(
+            reverse("properties:curator_image_delete", args=[self.prop.reference, fotografia.id])
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(PropertyImage.objects.filter(pk=fotografia.pk).exists())
+
+
+class CuratorDetailEditTests(TestCase):
+    """A ficha interna altera os campos que mostra, e não os que esconde."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            status=Property.Status.DRAFT,
+            has_garden=True,
+        )
+        self.url = reverse("properties:curator_detail", args=[self.prop.reference])
+
+    def _post(self, **extra: object) -> None:
+        """Submete a ficha com os mesmos campos que o template desenha."""
+        self.client.force_login(self.curator)
+        dados: dict[str, object] = {
+            "title": "Preço revisto",
+            "type": self.prop.type,
+            "purpose": self.prop.purpose,
+            "price": "500000",
+            "lease_term_months": "12",
+            "province_ref": self.prop.province_ref,
+            "municipality": self.prop.municipality,
+            "locality": self.prop.locality,
+            "latitude": "-8.918430",
+            "longitude": "13.184700",
+            "location_accuracy_m": "25",
+            "map_reference": "-8.918430,13.184700",
+            "bedrooms": "3",
+            "bathrooms": "2",
+        }
+        dados.update(extra)
+        self.client.post(self.url, dados)
+
+    def test_o_preco_alterado_fica_no_imovel(self) -> None:
+        """O objectivo do formulário: a alteração pretendida acontece."""
+        self._post()
+
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.title, "Preço revisto")
+        self.assertEqual(self.prop.price, Decimal("500000.00"))
+
+    def test_o_formulario_nao_tem_os_campos_que_a_pagina_nao_edita(self) -> None:
+        """A garantia estrutural: o que a página não mostra, o formulário não tem.
+
+        A ficha reutilizava o formulário de captação inteiro, e daí vinham duas
+        coisas erradas de uma vez. Exigia nome, telefone e documento do
+        proprietário numa página onde o proprietário não é o que se edita; e
+        como o template não os desenhava, o erro aparecia em campo nenhum e a
+        gravação nunca acontecia — a ficha devolvia o formulário sem dizer nada
+        e sem mudar nada.
+
+        Não é um teste de sintoma, é de causa: um campo ausente do formulário não
+        pode ser gravado, aconteça o que acontecer ao `form_valid`.
+        """
+        campos = set(PropertyQuickEditForm.base_fields)
+
+        for ausente in ("description", "has_garden", "has_pool", "owner_name", "address_hint"):
+            with self.subTest(campo=ausente):
+                self.assertNotIn(ausente, campos)
+
+    def test_a_pagina_desenha_todos_os_campos_do_formulario(self) -> None:
+        """Nenhum campo do formulário pode ficar sem o input que o preenche.
+
+        O inverso do teste anterior, e o que fecha a porta pela outra banda. Se o
+        formulário tem um campo que a página não desenha, esse campo volta vazio
+        do `POST` e é gravado como vazio: foi assim que a ficha quase apagava a
+        descrição e o pin verificado de um imóvel por causa de uma alteração de
+        preço.
+
+        Comparar os campos do formulário com os `name` que a página envia apanha
+        a divergência na origem, em vez de a provar mais tarde por um valor que
+        já não está.
+        """
+        self.client.force_login(self.curator)
+
+        html = self.client.get(self.url).content.decode("utf-8")
+        enviados = set(input_names_inside(html, "ficha-edicao"))
+
+        for campo in PropertyQuickEditForm.base_fields:
+            with self.subTest(campo=campo):
+                self.assertIn(
+                    campo,
+                    enviados,
+                    f"O campo {campo} está no formulário e a ficha não o desenha.",
+                )
+
+    def test_alterar_o_preco_nao_apaga_a_descricao(self) -> None:
+        """A descrição sobrevive a uma edição de preço, porque não é campo desta página."""
+        self._post()
+
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.description, "T3 arejado, com quintal e parque fechado.")
+        self.assertEqual(self.prop.area_m2, 120)
+        self.assertTrue(self.prop.has_water_tank)
+        self.assertTrue(self.prop.has_garden)
+
+    def test_alterar_o_preco_nao_apaga_a_localizacao_verificada(self) -> None:
+        """O pin confirmado pela equipa sobrevive a uma edição de outro campo (§2.3)."""
+        self._post()
+
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.latitude, Decimal("-8.918430"))
+        self.assertEqual(self.prop.location_accuracy_m, 25)
+        self.assertEqual(self.prop.map_reference, "-8.918430,13.184700")
+        self.assertIsNotNone(self.prop.location_verified_at)
+
+    def test_o_pin_pode_ser_corrigido_na_ficha(self) -> None:
+        """A ficha aceita um pin novo, e a confirmação passa a datar de hoje."""
+        antes = self.prop.location_verified_at
+
+        self._post(
+            latitude="-8.839000",
+            longitude="13.289400",
+            location_accuracy_m="18",
+            map_reference="-8.839000,13.289400",
+        )
+
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.latitude, Decimal("-8.839000"))
+        self.assertEqual(self.prop.longitude, Decimal("13.289400"))
+        self.assertEqual(self.prop.location_accuracy_m, 18)
+        self.assertEqual(self.prop.map_reference, "-8.839000,13.289400")
+        self.assertEqual(self.prop.description, "T3 arejado, com quintal e parque fechado.")
+        self.assertGreater(self.prop.location_verified_at, antes)
+
+    def test_arrendar_na_ficha_tambem_exige_prazo(self) -> None:
+        """A regra do §2.6 vale na edição, e não só na captação."""
+        self.client.force_login(self.curator)
+
+        resposta = self.client.post(
+            self.url,
+            {
+                "title": self.prop.title,
+                "type": self.prop.type,
+                "purpose": Property.Purpose.RENT,
+                "price": "450000",
+                "lease_term_months": "",
+                "province_ref": self.prop.province_ref,
+                "municipality": self.prop.municipality,
+                "locality": self.prop.locality,
+                "latitude": "-8.918430",
+                "longitude": "13.184700",
+                "bedrooms": "3",
+                "bathrooms": "2",
+            },
+        )
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Indique o prazo do contrato em meses.")
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.purpose, Property.Purpose.RENT)
+
+    def test_a_localidade_continua_vivel_quando_o_mapa_desaparece(self) -> None:
+        """Sem JavaScript, o pin escreve-se à mão e o resto da ficha não se perde.
+
+        O mapa escreve o pin, mas os campos continuam no HTML e continuam a ser
+        submeter o formulário numa página sem Leaflet tem de continuar a
+        funcionar, com os valores que já lá estavam.
+        """
+        self.client.force_login(self.curator)
+
+        html = self.client.get(self.url).content.decode("utf-8")
+
+        self.assertIn('name="latitude"', html)
+        self.assertIn('name="longitude"', html)
+        self.assertIn("-8.918430", html)
+
+
+class SeletorDePinTests(TestCase):
+    """O seletor de pin diz o que faz, e os campos sobrevivem sem ele (§2.3).
+
+    O mapa é melhoria progressiva, e isso não se prova com o mapa a funcionar.
+    Prova-se com a página aberta sem ele: os campos de coordenadas continuam ali,
+    e o estado do pin é uma frase que o servidor escreveu.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            status=Property.Status.DRAFT,
+            has_garden=True,
+        )
+        self.criar = reverse("properties:curator_create")
+        self.editar = reverse("properties:curator_detail", args=[self.prop.reference])
+
+    def _html(self, url: str) -> str:
+        self.client.force_login(self.curator)
+        return self.client.get(url).content.decode("utf-8")
+
+    def test_as_duas_fichas_entregam_a_configuracao_ao_javascript(self) -> None:
+        """O pin só existe se o JavaScript souber que tiles há e onde olhar."""
+        self.client.force_login(self.curator)
+        for url in (self.criar, self.editar):
+            with self.subTest(url=url):
+                resposta = self.client.get(url)
+                self.assertEqual(resposta.status_code, 200)
+                config = resposta.context["map_config"]
+                for placeholder in ("{z}", "{x}", "{y}"):
+                    self.assertIn(placeholder, config["tileUrl"])
+                self.assertTrue(str(config["attribution"]).strip())
+                # O `id` é o contrato com o `echilo.js`; mudá-lo não dá erro,
+                # dá um mapa que nunca lê a configuração.
+                self.assertContains(resposta, 'id="pin-map-config"')
+
+    def test_a_accao_principal_tem_nome(self) -> None:
+        """O botão é uma frase, e não o ícone de 30×30 do plugin.
+
+        No catálogo, um quadrado vazio dentro do mapa foi lido como mapa partido.
+        O rótulo é o que separa "isto não faz nada" de "isto faz o que diz".
+        """
+        html = self._html(self.editar)
+        self.assertIn("Usar a minha posição", html)
+        self.assertIn('type="button"', html)
+        self.assertIn('id="pin-localizar"', html)
+
+    def test_as_caixas_de_mensagem_tem_papeis_diferentes(self) -> None:
+        """Tiles são `alert` e geolocalização é `status`, e não ao contrário.
+
+        Um 403 do fornecedor a apagar a recusa da permissão mandava a equipa
+        seguir a pista errada. E dois alertas ao mesmo tempo fazem o leitor de
+        ecrã ler a mensagem errada.
+        """
+        html = self._html(self.editar)
+        self.assertIn('id="pin-erro" role="alert"', html)
+        self.assertIn('id="pin-aviso" role="status"', html)
+
+    def test_o_estado_do_pin_e_escrito_pelo_servidor(self) -> None:
+        """Quem abre a ficha sem JavaScript vê o pin actual, ou a falta dele.
+
+        Um mapa vazio sem explicação obriga a equipa a adivinhar se falta o mapa
+        ou falta o pin, e o único sintoma dos dois é o mesmo.
+        """
+        self.prop.latitude = None
+        self.prop.longitude = None
+        self.prop.location_accuracy_m = None
+        self.prop.save(update_fields=["latitude", "longitude", "location_accuracy_m"])
+        self.assertIn("Ainda não há pin", self._html(self.editar))
+
+        self.prop.latitude = -8.918430
+        self.prop.longitude = 13.234400
+        self.prop.location_accuracy_m = 12
+        self.prop.save(update_fields=["latitude", "longitude", "location_accuracy_m"])
+        html = self._html(self.editar)
+        self.assertIn("Pin actual:", html)
+        # O mesmo `coordinate` dos cartões: vírgula decimal e sem zeros à
+        # direita. O valor com ponto pertence aos campos, e escrevê-lo aqui
+        # trocaria leitura por máquina.
+        self.assertIn(f"Pin actual: {coordinate(self.prop.latitude)}, "
+                      f"{coordinate(self.prop.longitude)}.", html)
+        self.assertNotIn("-8.918430, 13.234400.", html)
+
+    def test_as_coordenadas_escrevem_se_a_mao(self) -> None:
+        """O ponto decimal e o separador local não podem trancar o campo.
+
+        `pt-ao` escreve `-8,918430` e o `Decimal` quer `-8.918430`; o formulário
+        é que traduz. Se o campo saísse `readonly`, a tradução passava a ser a
+        única forma de lá chegar.
+        """
+        html = self._html(self.editar)
+        for campo in ("latitude", "longitude", "location_accuracy_m", "map_reference"):
+            with self.subTest(campo=campo):
+                self.assertIn(f'name="{campo}"', html)
+        for atributo in ("readonly", "disabled"):
+            with self.subTest(atributo=atributo):
+                self.assertNotIn(f'input name="latitude" {atributo}', html)
+
+    def test_a_atribuicao_das_fronteiras_vai_no_mapa(self) -> None:
+        """A CC BY 4.0 exige que quem usa os dados diga de onde são."""
+        html = self._html(self.editar)
+        self.assertIn("geoBoundaries (CC BY 4.0)", html)
+
+    def test_o_cliente_nao_alcanca_as_fichas(self) -> None:
+        """O seletor de pin não é uma porta lateral para a curadoria."""
+        cliente = make_user(role="CLIENT", email="cliente@echilo.ao")
+        self.client.force_login(cliente)
+        for url in (self.criar, self.editar):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_a_divisao_que_o_pin_escreve_tem_de_onde_se_ler(self) -> None:
+        """A resposta do mapa é escrita nesta linha, e ela é a mesma sem JavaScript.
+
+        Quem preenche a divisão a partir do pin precisa de uma frase que diga o
+        que os campos ficaram a dizer. Um `#pin-divisao` que só existe depois do
+        mapa arrancar é uma resposta que ninguém pode ler quando o mapa não
+        arranca, e a ficha fica sem explicar o que o pin preencheu.
+        """
+        html = self._html(self.criar)
+
+        self.assertIn('id="pin-divisao"', html)
+        self.assertIn("A província e o município ficam por preencher", html)
+
+    def test_a_ficha_editada_diz_a_divisao_que_ja_tem(self) -> None:
+        """Um imóvel guardado mostra a divisão com o nome, e não com a sigla.
+
+        O valor do campo é o código — `LUANDA` — porque é o que o `select` e a
+        base de dados usam. Escrever a sigla na frase que a equipa lê seria
+        obrigar a traduzir de memória o que a página tem à frente.
+        """
+        self.prop.province_ref = "LUANDA"
+        self.prop.municipality = "Talatona"
+        self.prop.save(update_fields=["province_ref", "municipality"])
+        html = self._html(self.editar)
+
+        self.assertIn("Divisão actual: Luanda, município de Talatona.", html)
+        self.assertNotIn("Divisão actual: LUANDA", html)
+
+    def test_o_mapa_recebe_a_correspondencia_entre_contorno_e_codigo(self) -> None:
+        """O JavaScript escreve um código, e o código está na tabela do projecto.
+
+        O contorno chama-se "Cuando Cubango" e o projecto tem `CUANDO` e
+        `CUBANGO` para essa divisão. Sem a correspondência no `config`, o pin
+        encontraria um nome que nenhum `option` tem, e `select.value = nome`
+        deixaria a província vazia sem erro nenhum.
+        """
+        self.client.force_login(self.curator)
+        resposta = self.client.get(self.criar)
+        correspondencia = resposta.context["map_config"]["provinciasPorFronteira"]
+        self.assertEqual(correspondencia["Luanda"], ["LUANDA"])
+        self.assertEqual(correspondencia["Cuando Cubango"], ["CUANDO", "CUBANGO"])
+
+    def test_toda_a_fronteira_desenhada_tem_provincia_que_o_campo_aceita(self) -> None:
+        """Uma divisão que o mapa desenha e o formulário não sabe é um beco sem saída.
+
+        As dezoito divisões da fonte e as vinte e uma da lista não são o mesmo
+        número, e a diferença tem de ser `Icolo e Bengo` e `Moxico Leste` — as
+        duas que a fonte não desenha. Uma terceira, ou uma quarta, seria uma
+        pergunta que o mapa responde e a ficha não consegue escrever.
+        """
+        self.client.force_login(self.curator)
+        resposta = self.client.get(self.criar)
+        correspondencia = resposta.context["map_config"]["provinciasPorFronteira"]
+        fonte = json.loads(
+            (
+                Path(settings.BASE_DIR)
+                / "static"
+                / "vendor"
+                / "geo"
+                / "angola-provincias.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        nomes = {f["properties"]["nome"] for f in fonte["features"]}
+        self.assertEqual(nomes - set(correspondencia), set())
+        # E o inverso: cada código da correspondência é uma opção do campo.
+        opcoes = {
+            opcao for opcao, _ in ANGOLA_PROVINCES
+        }
+        for codigos in correspondencia.values():
+            for codigo in codigos:
+                with self.subTest(codigo=codigo):
+                    self.assertIn(codigo, opcoes)
+
+
+class CuratorCreateWithPhotosTests(TestCase):
+    """O registo de imóvel com o lote de fotografias no mesmo pedido (§2.1).
+
+    A equipa fotografa o imóvel inteiro antes de se sentar a carregar, e o
+    cadastro é onde o imóvel nasce. Exigir as fotografias aqui obrigaria a
+    fotografar antes de o imóvel estar registado, que é o passo que a equipa dá
+    depois de o registar. Por isso o campo existe, é opcional, e o que ele faz é
+    o mesmo que a ficha faz.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.url = reverse("properties:curator_create")
+        self.client.force_login(self.curator)
+
+    def _dados(self, **extra: object) -> dict[str, object]:
+        """Os campos que o formulário desenha, e nada mais."""
+        dados: dict[str, object] = {
+            "title": "T3 no Kilamba com quintal",
+            "description": "Sala ampla, dois quartos e quintal.",
+            "type": Property.Type.APARTMENT,
+            "purpose": Property.Purpose.RENT,
+            "price": "450000.00",
+            "lease_term_months": 12,
+            "province_ref": "LUANDA",
+            "municipality": "Talatona",
+            "locality": "Kilamba",
+            "latitude": "-8.918430",
+            "longitude": "13.184700",
+            "owner_name": "Joaquim Ferreira",
+            "owner_phone": "+244 923 456 789",
+            "owner_id_number": "004512389LA041",
+        }
+        dados.update(extra)
+        return dados
+
+    def _foto(self, nome: str = "casa.jpg", *, cor: tuple[int, int, int] = (40, 32, 22)) -> SimpleUploadedFile:
+        return SimpleUploadedFile(nome, jpeg_bytes(cor), content_type="image/jpeg")
+
+    def test_a_pagina_desenha_o_campo_de_fotografias(self) -> None:
+        """O campo no formulário e ausente na página é um campo que volta vazio.
+
+        O inverso do que se mede na ficha: se o formulário tem `images` e a página
+        não desenha o input, o `POST` não traz ficheiro nenhum e o registo fica
+        sem fotografia sem erro nenhum.
+        """
+        html = self.client.get(self.url).content.decode("utf-8")
+
+        self.assertIn('name="images"', html)
+        self.assertIn('type="file"', html)
+        self.assertIn("multipart/form-data", html)
+
+    def test_o_campo_e_opcional_e_nao_bloqueia_o_envio(self) -> None:
+        """Um `required` no HTML tranca o browser e o servidor aceitaria vazio.
+
+        O `BaseStyledForm` põe `required` no widget de cada campo obrigatório, e
+        o sinal que torna as fotografias opcionais corre depois de `super()`. A
+        atributo que ficasse no HTML fazia o browser recusar o envio de quem
+        quer registar o imóvel primeiro e fotografar depois.
+        """
+        html = self.client.get(self.url).content.decode("utf-8")
+        campo = re.search(r'<input[^>]*name="images"[^>]*>', html)
+
+        self.assertIsNotNone(campo)
+        self.assertNotIn("required", campo.group(0))
+
+    def test_registar_sem_fotografias_e_guardado(self) -> None:
+        """O imóvel nasce em rascunho, e um rascunho não tem fotografia nenhuma."""
+        resposta = self.client.post(self.url, self._dados())
+
+        self.assertEqual(resposta.status_code, 302)
+        immobile = Property.objects.get(title="T3 no Kilamba com quintal")
+        self.assertEqual(immobile.status, Property.Status.DRAFT)
+        self.assertEqual(immobile.images.count(), 0)
+        self.assertNotIn("#fotografias", resposta["Location"])
+
+    def test_o_lote_vai_no_mesmo_pedido_e_a_primeira_e_a_capa(self) -> None:
+        """Carregar cinco de uma vez, e a primeira escolhida é a capa."""
+        resposta = self.client.post(
+            self.url,
+            self._dados(
+                images=[
+                    self._foto("primeira.jpg", cor=(200, 30, 30)),
+                    self._foto("segunda.jpg", cor=(30, 200, 30)),
+                    self._foto("terceira.jpg", cor=(30, 30, 200)),
+                ]
+            ),
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        immobile = Property.objects.get(title="T3 no Kilamba com quintal")
+        self.assertEqual(immobile.images.count(), 3)
+        # A numeração segue a ordem de escolha, e a capa é a primeira.
+        self.assertEqual(
+            [imagem.sort_order for imagem in immobile.images.all()], [0, 1, 2]
+        )
+        self.assertIn("primeira", immobile.images.first().image.name)
+        self.assertTrue(resposta["Location"].endswith("#fotografias"))
+
+    def test_um_ficheiro_mau_nao_leva_o_lote_consigo(self) -> None:
+        """As boas entram, a má é recusada, e a página diz qual foi."""
+        texto = SimpleUploadedFile("nota.txt", b"isto nao e uma imagem", content_type="text/plain")
+
+        resposta = self.client.post(
+            self.url, self._dados(images=[self._foto("boa.jpg"), texto])
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        immobile = Property.objects.get(title="T3 no Kilamba com quintal")
+        self.assertEqual(immobile.images.count(), 1)
+        avisos = [str(m) for m in get_messages(resposta.wsgi_request)]
+        self.assertTrue(any("nota.txt" in aviso for aviso in avisos), avisos)
+
+    def test_o_excesso_diz_se_e_guarda_o_que_cabe(self) -> None:
+        """Dezoito escolhidos com três lá dentro guarda três e avisa.
+
+        Recusar o lote inteiro obrigaria a contar o que já lá estava, e o número
+        que o formulário anuncia é o número que a pessoa viu no ecrã.
+        """
+        lote = [self._foto(f"{indice}.jpg", cor=(indice * 10, 0, 0)) for indice in range(MAX_FOTOS + 3)]
+
+        resposta = self.client.post(self.url, self._dados(images=lote))
+
+        immobile = Property.objects.get(title="T3 no Kilamba com quintal")
+        self.assertEqual(immobile.images.count(), MAX_FOTOS)
+        mensagens = [str(m) for m in get_messages(resposta.wsgi_request)]
+        self.assertTrue(any("15" in mensagem for mensagem in mensagens), mensagens)
+
+
+class DivisaoTrancadaTests(TestCase):
+    """O trinco que a posição do dispositivo põe na divisão (§2.3).
+
+    Ler a divisão fora do `POST` é o perigo disto: um campo `disabled` não viaja,
+    e o imóvel gravava-se sem província com a página a dizer que estava tudo
+    certo. O JavaScript cobre-se com um espelho escondido, e estes testes são o
+    chão que fica por baixo dele — o servidor recusa a divisão em falta em vez de
+    a aceitar, que é o que torna o estrago visível em vez de silencioso.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.url = reverse("properties:curator_create")
+        self.client.force_login(self.curator)
+
+    def _dados(self, **extra: object) -> dict[str, object]:
+        dados: dict[str, object] = {
+            "title": "T3 no Kilamba com quintal",
+            "description": "Sala ampla, dois quartos e quintal.",
+            "type": Property.Type.APARTMENT,
+            "purpose": Property.Purpose.RENT,
+            "price": "450000.00",
+            "lease_term_months": 12,
+            "province_ref": "LUANDA",
+            "municipality": "Talatona",
+            "locality": "Kilamba",
+            "latitude": "-8.918430",
+            "longitude": "13.184700",
+            "owner_name": "Joaquim Ferreira",
+            "owner_phone": "+244 923 456 789",
+            "owner_id_number": "004512389LA041",
+        }
+        dados.update(extra)
+        return dados
+
+    def test_a_divisao_que_o_javascript_tranca_e_obrigatoria(self) -> None:
+        """O trinco só pode cair em campos que o servidor já exigia.
+
+        Trancar um campo opcional não estraga nada; trancar um obrigatório sem o
+        valor viajar é a divisão a desaparecer. Saber quais são os campos é o que
+        impede o `echilo.js` de ir buscar o elemento errado e de o trancar em
+        silêncio, sem a página dizer nada.
+        """
+        html = self.client.get(self.url).content.decode("utf-8")
+        for campo in ("province_ref", "municipality"):
+            with self.subTest(campo=campo):
+                self.assertIn(f'name="{campo}"', html)
+
+        form = PropertyCuratorForm()
+        for campo in ("province_ref", "municipality"):
+            with self.subTest(campo=campo):
+                self.assertTrue(form.fields[campo].required)
+
+    def test_a_divisao_que_o_mapa_nao_sabe_nao_e_trancada_com_valor_vazio(self) -> None:
+        """O trinco é por campo, e só quando o mapa preencheu.
+
+        Um campo trancado e vazio é um formulário que não sai e não tem como ser
+        corrigido sem recarregar a página. Um município que a fonte não desenha —
+        são mais de trinta — tem de continuar a ser escrito à mão, e a província
+        continua a poder ser trancada ao lado dele.
+        """
+        dados = self._dados(province_ref="", municipality="")
+
+        resposta = self.client.post(self.url, dados)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertFalse(Property.objects.exists())
+        contexto = resposta.context
+        self.assertIsNotNone(contexto)
+        form = contexto["form"]
+        self.assertIn("province_ref", form.errors)
+        self.assertIn("municipality", form.errors)
+
+    def test_a_divisao_que_o_mapa_escreve_viaja_no_pedido(self) -> None:
+        """O caminho que o espelho tem de servir: um `POST` normal.
+
+        O espelho é um `input type="hidden"` com o `name` do campo, e o Django não
+        distingue um `readonly` de um que a pessoa preencheu. Um imóvel registado
+        pela posição do aparelho tem de ficar com a mesma divisão que um registado
+        a dedo, ou a distinção entre as duas coisas é só uma ilusão de ecrã.
+        """
+        resposta = self.client.post(self.url, self._dados())
+
+        self.assertEqual(resposta.status_code, 302)
+        immobile = Property.objects.get(title="T3 no Kilamba com quintal")
+        self.assertEqual(immobile.province_ref, "LUANDA")
+        self.assertEqual(immobile.municipality, "Talatona")
+        self.assertEqual(Decimal(immobile.latitude), Decimal("-8.918430"))
+        self.assertEqual(Decimal(immobile.longitude), Decimal("13.184700"))
+
+
+class ApagarImovelTests(TestCase):
+    """Apagar é a acção que não tem volta, e por isso a regra é testada antes do botão.
+
+    A regra é do produto e não do ficheiro: apaga-se o imóvel que ainda não foi
+    transacionado, e o arquivado é do administrador. Cada motivo de recusa tem o
+    seu teste, porque um motivo que se cala ao passar do `AGENT` para o `ADMIN` dá
+    um botão que aparece para um e desaparece para o outro sem ninguém saber porquê.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.agent = make_user(role="AGENT", email="agente@echilo.ao")
+        self.admin = make_user(role="ADMIN", email="chefe@echilo.ao", is_staff=True)
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            status=Property.Status.UNDER_VALIDATION,
+        )
+        self.detail_url = reverse("properties:curator_detail", args=[self.prop.reference])
+        self.delete_url = reverse("properties:curator_delete", args=[self.prop.reference])
+        self.dashboard_url = reverse("properties:curator_dashboard")
+
+    def _dados(self, **overrides: object) -> dict[str, object]:
+        dados: dict[str, object] = {
+            "reference": self.prop.reference,
+            "reason": "Duplicado do ECH-LU-0002, carregado duas vezes.",
+        }
+        dados.update(overrides)
+        return dados
+
+    def _arquiva(self, prop: Property | None = None) -> None:
+        alvo = prop or self.prop
+        alvo.status = Property.Status.ARCHIVED
+        alvo.save(update_fields=["status"])
+
+    def _aceita_oferta(self, prop: Property | None = None) -> None:
+        from apps.concierge.models import Offer
+
+        alvo = prop or self.prop
+        Offer.objects.create(
+            property=alvo,
+            submitted_by=make_user(email="comprador@echilo.ao"),
+            amount=Decimal("450000.00"),
+            status=Offer.Status.ACCEPTED,
+        )
+
+    def _confirma_visita(self, prop: Property | None = None) -> None:
+        from django.utils import timezone
+
+        from apps.concierge.models import VisitRequest
+
+        alvo = prop or self.prop
+        VisitRequest.objects.create(
+            property=alvo,
+            requested_by=make_user(email="visitante@echilo.ao"),
+            scheduled_for=timezone.now() + timezone.timedelta(days=2),
+            status=VisitRequest.Status.CONFIRMED,
+        )
+
+    def test_o_agente_apaga_o_imovel_e_o_registo_sobrevive(self) -> None:
+        """O apagamento tem de ficar escrito mesmo depois de o imóvel deixar de existir."""
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertRedirects(resposta, self.dashboard_url)
+        self.assertFalse(Property.objects.filter(pk=self.prop.pk).exists())
+        registo = PropertyDeletion.objects.get(reference=self.prop.reference)
+        self.assertEqual(registo.actor, self.agent)
+        self.assertEqual(registo.status_at_deletion, Property.Status.UNDER_VALIDATION)
+        self.assertIn("Duplicado", registo.reason)
+
+    def test_o_ficheiro_da_fotografia_vai_com_a_linha(self) -> None:
+        """Uma fotografia órfã na Cloudinary é uma factura mensal de ninguém."""
+        imagem = make_image(self.prop)
+        caminho = imagem.image.name
+        self.client.force_login(self.agent)
+
+        self.client.post(self.delete_url, self._dados())
+
+        self.assertFalse(PropertyImage.objects.exists())
+        self.assertFalse(os.path.exists(str(Path(settings.MEDIA_ROOT) / caminho)))
+
+    def test_a_prova_de_quem_abriu_a_escritura_sobrevive(self) -> None:
+        """O §6 pede o registo de acesso, e o ficheiro pode ir. A prova fica.
+
+        `DocumentAccessLog` apontava para o documento com `PROTECT`, o que tornava
+        o apagamento impossível. Passou a retrato: o acesso guarda a referência, o
+        tipo e o nome do ficheiro, e é isso que sobrevive à ida do ficheiro.
+        """
+        documento = PropertyDocument.objects.create(
+            property=self.prop,
+            document_type=PropertyDocument.DocumentType.OWNERSHIP_TITLE,
+            file=SimpleUploadedFile("escritura.pdf", b"%PDF-1.4 stub", content_type="application/pdf"),
+        )
+        acesso = DocumentAccessLog.objects.create(document=documento, actor=self.agent)
+        self.client.force_login(self.agent)
+
+        self.client.post(self.delete_url, self._dados())
+
+        acesso.refresh_from_db()
+        self.assertIsNone(acesso.document)
+        self.assertEqual(acesso.property_reference, self.prop.reference)
+        self.assertEqual(acesso.document_type, PropertyDocument.DocumentType.OWNERSHIP_TITLE)
+        self.assertTrue(acesso.file_name.endswith(".pdf"))
+
+    def test_o_motivo_e_obrigatorio(self) -> None:
+        """Um imóvel apagado sem explicação é indistinguível de um erro de dedo."""
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados(reason="   "))
+
+        self.assertRedirects(resposta, self.detail_url)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+        self.assertFalse(PropertyDeletion.objects.exists())
+
+    def test_a_referencia_tem_de_bater_com_a_da_ficha(self) -> None:
+        """Ninguém apaga o imóvel errado a partir de uma ficha com o título parecido."""
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados(reference="ECH-LU-9999"))
+
+        self.assertRedirects(resposta, self.detail_url)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_a_referencia_aceita_minusculas(self) -> None:
+        """Quem copia a referência da ficha escreve-a como a lê; maiúsculas não devem mandar."""
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados(reference=self.prop.reference.lower()))
+
+        self.assertRedirects(resposta, self.dashboard_url)
+        self.assertFalse(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_um_cliente_nao_apaga(self) -> None:
+        cliente = make_user(email="cliente@echilo.ao")
+        self.client.force_login(cliente)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertEqual(resposta.status_code, 403)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_um_curador_nao_apaga(self) -> None:
+        """Curadoria cria e edita imóveis; não retira fichas públicas."""
+        self.client.force_login(self.curator)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertEqual(resposta.status_code, 403)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_um_get_nao_apaga(self) -> None:
+        """A rota responde a GET a redireitar, e nunca apaga por GET."""
+        self.client.force_login(self.agent)
+
+        resposta = self.client.get(self.delete_url)
+
+        self.assertRedirects(resposta, self.detail_url)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_proposta_aceita_impede_o_apagamento(self) -> None:
+        """O imóvel vendido tem comprador em papel, e o papel é a prova da venda."""
+        self._aceita_oferta()
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertRedirects(resposta, self.detail_url)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+        mensagens = [str(m) for m in get_messages(resposta.wsgi_request)]
+        self.assertTrue(any("proposta aceite" in m.lower() for m in mensagens), mensagens)
+
+    def test_visita_confirmada_impede_o_apagamento(self) -> None:
+        self._confirma_visita()
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertRedirects(resposta, self.detail_url)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_visita_recusada_nao_impede_o_apagamento(self) -> None:
+        """O que não chegou a acontecer não prende o imóvel."""
+        from django.utils import timezone
+
+        from apps.concierge.models import VisitRequest
+
+        VisitRequest.objects.create(
+            property=self.prop,
+            requested_by=make_user(email="outro@echilo.ao"),
+            scheduled_for=timezone.now() + timezone.timedelta(days=2),
+            status=VisitRequest.Status.DECLINED,
+        )
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertRedirects(resposta, self.dashboard_url)
+        self.assertFalse(Property.objects.filter(pk=self.prop.pk).exists())
+
+    def test_o_agente_nao_apaga_um_arquivado(self) -> None:
+        """Arquivar é o caminho que o produto desenhou; contorná-lo é de chefia."""
+        self._arquiva()
+        self.client.force_login(self.agent)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertRedirects(resposta, self.detail_url)
+        self.assertTrue(Property.objects.filter(pk=self.prop.pk).exists())
+        mensagens = [str(m) for m in get_messages(resposta.wsgi_request)]
+        self.assertTrue(any("administrador" in m.lower() for m in mensagens), mensagens)
+
+    def test_o_administrador_apaga_um_arquivado(self) -> None:
+        self._arquiva()
+        self.client.force_login(self.admin)
+
+        resposta = self.client.post(self.delete_url, self._dados())
+
+        self.assertRedirects(resposta, self.dashboard_url)
+        self.assertFalse(Property.objects.filter(pk=self.prop.pk).exists())
+        self.assertEqual(
+            PropertyDeletion.objects.get(reference=self.prop.reference).status_at_deletion,
+            Property.Status.ARCHIVED,
+        )
+
+    def test_a_ficha_diz_porque_nao_se_pode_apagar(self) -> None:
+        """Um botão que desapareceu sem frase lê-se como uma página partida."""
+        self._aceita_oferta()
+        self.client.force_login(self.agent)
+
+        resposta = self.client.get(self.detail_url)
+
+        html = resposta.content.decode("utf-8")
+        self.assertIn("proposta aceite", html)
+        self.assertNotIn("Apagar {{ property.reference }}", html)
+
+    def test_a_ficha_oferece_o_formulario_ao_agente(self) -> None:
+        self.client.force_login(self.agent)
+
+        html = self.client.get(self.detail_url).content.decode("utf-8")
+
+        self.assertIn(self.delete_url, html)
+        self.assertIn("Motivo do apagamento", html)
+
+    def test_a_ficha_nao_oferece_o_formulario_ao_curador(self) -> None:
+        self.client.force_login(self.curator)
+
+        html = self.client.get(self.detail_url).content.decode("utf-8")
+
+        self.assertNotIn(self.delete_url, html)
+
+
+class MarcasDeTemplateTests(TestCase):
+    """Nenhuma página pode entregar marca de template ao browser.
+
+    Um `{%` sem o `%}` da mesma linha não dá erro de sintaxe. O `tag_re` do
+    Django procura o fecho no ficheiro todo e engole tudo o que está pelo meio,
+    e o token resultante sai como texto: a página aparece com o tag escrito à
+    letra e com o conteúdo do meio simplesmente em falta. O `href` de um botão
+    passava a ser `/imovel/ECH-LU-0006/{% url 'assistant:chat'`, que é um 404
+    quando somebody clica nele, e ninguém vía o erro em lado nenhum.
+
+    A verificação é sobre o HTML servido e não sobre o ficheiro: o que interessa
+    é o que chega ao browser, e um tag bem formado que não resolve dá a mesma
+    página. Uma linha por marca é o teste, e é mais largo do que o bug — apanha
+    o mesmo estrago em qualquer template.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            status=Property.Status.PUBLISHED,
+        )
+        make_image(self.prop, caption="Fachada")
+
+    def _paginas(self) -> list[tuple[str, str]]:
+        return [
+            ("home", reverse("properties:home")),
+            ("catálogo", reverse("properties:property_list")),
+            (
+                "ficha do imóvel",
+                reverse("properties:property_detail", args=[self.prop.reference]),
+            ),
+        ]
+
+    def test_nenhuma_pagina_publica_entrega_marca_de_template(self) -> None:
+        for nome, url in self._paginas():
+            with self.subTest(pagina=nome):
+                resposta = self.client.get(url)
+                self.assertEqual(resposta.status_code, 200)
+                html = resposta.content.decode("utf-8")
+                for marca in ("{%", "{{", "{#"):
+                    self.assertNotIn(marca, html)
+
+    def test_os_links_da_home_apontam_para_algo(self) -> None:
+        """Um `href` que não é um URL é um botão que não vai a lado nenhum."""
+        html = self.client.get(reverse("properties:home")).content.decode("utf-8")
+
+        for href in re.findall(r'href="([^"]*)"', html):
+            with self.subTest(href=href[:60]):
+                self.assertTrue(
+                    href.startswith("/") or href.startswith("#") or href.startswith("http"),
+                    "href que não é caminho: %s" % href[:60],
+                )
 
 
 class AngolaReferenceTests(SimpleTestCase):
