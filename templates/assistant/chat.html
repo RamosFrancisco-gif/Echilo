@@ -46,11 +46,12 @@
       <form class="chat__composer"
             hx-post="{% url 'assistant:chat_message' %}"
             hx-target="#chat-body"
-            hx-swap="innerHTML"
+            hx-swap="beforeend"
             hx-on::after-request="this.reset()"
             hx-indicator="#chat-skeleton">
         {% csrf_token %}
         <input type="hidden" name="conversation_id" value="{{ conversation.pk|default:'' }}" id="conversation-id">
+        <input type="hidden" name="after_message_id" value="{{ last_message_id|default_if_none:'' }}" id="ultima-mensagem">
         <label class="sr" for="chat-question">Escreva a sua pergunta</label>
         <input class="field-control" type="text" name="question" id="chat-question" maxlength="400"
                placeholder="Ex.: mostre-me terrenos em Viana" autocomplete="off" required>

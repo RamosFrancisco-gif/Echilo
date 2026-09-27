@@ -1,11 +1,25 @@
 {% comment %}
-  Trecho de mensagens do chat. É substituído por HTMX após cada pergunta, por isso
-  nunca deve depender de contexto que não seja fornecido pela view.
+  Trecho de mensagens do chat, acrescentado ao fim de #chat-body por HTMX. Nunca
+  deve depender de contexto que não seja fornecido pela view.
+
+  Este partial desenha o que ainda não foi visto, e não a conversa inteira. O
+  JavaScript diz até onde o cliente já chegou com #ultima-mensagem, e é essa a
+  fronteira: redesenhar tudo a cada pergunta substituía as 40 mensagens da
+  página pelas 6 últimas, e a conversa encolhia a cada turno. As mensagens
+  internas da equipa nunca entram — `messages_after` e `recent_messages`
+  excluem-nas, e o filtro abaixo é a rede para um contexto escrito à mão.
 {% endcomment %}
 {% for message in messages %}
-  <div class="bubble {% if message.author == 'CLIENT' %}bubble--client{% elif message.author == 'STAFF' %}bubble--staff{% endif %}{% if message.is_escalation_notice %} bubble--notice{% endif %}">
+  {% if not message.is_internal %}
+  <div class="bubble {% if message.author == 'CLIENT' %}bubble--client{% elif message.author == 'STAFF' %}bubble--staff{% endif %}{% if message.is_escalation_notice %} bubble--notice{% endif %}"
+       data-message-id="{{ message.pk }}">
     {{ message.body|linebreaksbr }}
   </div>
+  {% endif %}
 {% empty %}
-  <p class="chat__empty">{{ greeting|default:"Em que posso ajudar? Posso mostrar imóveis publicados, explicar características ou comparar opções." }}</p>
+  {% if notice %}
+    <p class="bubble bubble--staff bubble--notice">{{ notice }}</p>
+  {% elif show_greeting %}
+    <p class="chat__empty">{{ greeting|default:"Em que posso ajudar? Posso mostrar imóveis publicados, explicar características ou comparar opções." }}</p>
+  {% endif %}
 {% endfor %}

@@ -348,6 +348,11 @@ class Message(models.Model):
     author = models.CharField("autor", max_length=10, choices=Author.choices)
     body = models.TextField("conteúdo")
     is_escalation_notice = models.BooleanField("aviso de escalação", default=False)
+    # O motivo técnico da escalação é da equipa, não do cliente. Escrevê-lo como
+    # uma bolha normal punha o diagnóstico dentro da conversa: o cliente lia
+    # "Erro técnico no assistente." e a equipa, que devia agir, não o via em
+    # lado nenhum. Fica na base, para o admin, e fora do ecrã do cliente.
+    is_internal = models.BooleanField("uso interno da equipa", default=False)
     created_at = models.DateTimeField("enviada em", auto_now_add=True)
 
     class Meta:

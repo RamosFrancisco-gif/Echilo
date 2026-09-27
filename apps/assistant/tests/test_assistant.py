@@ -9,10 +9,11 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
+from django.template.loader import render_to_string
 from django.urls import reverse
 
 from apps.assistant.provider import AssistantUnavailable, GroqProvider, should_escalate
-from apps.assistant.services import ask
+from apps.assistant.services import _history_for, ask
 from apps.assistant.tools import (
     TOOL_SCHEMAS,
     TOOL_SEARCH_PROPERTIES,
@@ -21,6 +22,7 @@ from apps.assistant.tools import (
     run_tool,
 )
 from apps.concierge.models import Conversation, Message
+from apps.concierge.services import messages_after
 from apps.core.testing import make_owner, make_property, make_user
 from apps.properties.models import Property
 
@@ -468,8 +470,250 @@ class ChatViewTests(TestCase):
         self.assertEqual(statuses[20], 429)
         self.assertEqual(client.request_count, 20)
 
+    def test_rate_limit_says_why_instead_of_greeting_again(self) -> None:
+        """O limite de perguntas diz o que aconteceu; a saudação não explica nada."""
+        client = FakeGroqClient([text_reply("Resposta.")] * 25)
+
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", return_value=client),
+        ):
+            for n in range(20):
+                self.client.post(self.url, {"question": f"Pergunta {n}"}, HTTP_HX_REQUEST="true")
+            response = self.client.post(
+                self.url, {"question": "Mais uma"}, HTTP_HX_REQUEST="true"
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertContains(response, "limite de perguntas", status_code=429)
+        self.assertNotContains(response, "Em que posso ajudar?", status_code=429)
+
     def test_get_is_not_allowed(self) -> None:
         """O endpoint de mensagem só aceita POST."""
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 405)
+
+
+class ChatAppendTests(TestCase):
+    """O HTMX acrescenta o turno novo; não volta a desenhar a conversa inteira.
+
+    Trocar o `innerHTML` inteiro de #chat-body por um tecto de mensagens
+    fazia a conversa encolher a cada pergunta e deixava a resposta nova fora da
+    área visível. Estes testes medem o que o HTMX recebe, que é onde o defeito
+    aparecia.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.url = reverse("assistant:chat_message")
+        self.user = make_user(email="conversa@exemplo.ao")
+        self.client.force_login(self.user)
+        self.conversation = Conversation.objects.create(user=self.user)
+
+    def _perguntar(self, question: str, *, after: int | None) -> object:
+        client = FakeGroqClient([text_reply(f"Resposta a {question}.")])
+        dados = {"question": question}
+        if after is not None:
+            dados["after_message_id"] = str(after)
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", return_value=client),
+        ):
+            return self.client.post(self.url, dados, HTTP_HX_REQUEST="true")
+
+    def test_o_turno_novo_nao_arrasta_o_historico(self) -> None:
+        """A resposta do HTMX traz o turno novo e nada do que já estava lá."""
+        primeira = self._perguntar("Qual é a renda?", after=None)
+        self.assertEqual(primeira.status_code, 200)
+        ultima = Message.objects.order_by("id").last()
+
+        segunda = self._perguntar("Aceita anual?", after=ultima.pk)
+
+        self.assertEqual(segunda.status_code, 200)
+        self.assertContains(segunda, "Resposta a Aceita anual?.")
+        self.assertNotContains(segunda, "Resposta a Qual é a renda?.")
+        self.assertNotContains(segunda, "Qual é a renda?", msg_prefix="")
+
+    def test_a_conversa_nao_encolhe_ao_longo_dos_turnos(self) -> None:
+        """Depois de vários turnos a página ainda desenha tudo o que foi dito."""
+        anterior = 0
+        for n in range(4):
+            resposta = self._perguntar(f"Pergunta {n}", after=anterior)
+            self.assertEqual(resposta.status_code, 200)
+            anterior = Message.objects.order_by("id").last().pk
+
+        janela = self.client.get(reverse("assistant:chat"))
+
+        for n in range(4):
+            self.assertContains(janela, f"Resposta a Pergunta {n}.")
+
+    def test_sem_o_id_da_ultima_mensagem_troca_tudo(self) -> None:
+        """Sem `after_message_id` o servidor redesenha a janela, e não duplica."""
+        self._perguntar("Qual é a renda?", after=None)
+
+        resposta = self._perguntar("Aceita anual?", after=None)
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Resposta a Aceita anual?.")
+        self.assertContains(resposta, "Resposta a Qual é a renda?.")
+
+    def test_um_id_invalido_nao_da_500(self) -> None:
+        """Um campo escrito à mão com lixo não pode deitar a página abaixo."""
+        resposta = self._perguntar("Qual é a renda?", after="isto não é um id")
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Resposta a Qual é a renda?.")
+
+    def test_a_saudacao_so_aparece_no_primeiro_render(self) -> None:
+        """Um apêndice vazio não volta a desenhar a saudação no meio da conversa."""
+        ultima = self._perguntar("Qual é a renda?", after=None)
+        self.assertNotContains(ultima, "Em que posso ajudar?")
+
+    def test_a_pagina_anuncia_o_ponto_de_retomada(self) -> None:
+        """O formulário diz ao servidor o que o cliente já viu."""
+        self._perguntar("Qual é a renda?", after=None)
+
+        pagina = self.client.get(reverse("assistant:chat"))
+        html = pagina.content.decode()
+
+        ultima = Message.objects.order_by("id").last().pk
+        self.assertIn('hx-swap="beforeend"', html)
+        self.assertIn(f'value="{ultima}"', html)
+
+    def test_a_bolha_carrega_o_seu_proprio_id(self) -> None:
+        """É do DOM que o JavaScript lê o id, logo a bolha tem de o trazer."""
+        self._perguntar("Qual é a renda?", after=None)
+
+        pagina = self.client.get(reverse("assistant:chat"))
+
+        for mensagem in Message.objects.all():
+            self.assertContains(
+                pagina, f'data-message-id="{mensagem.pk}"', html=False
+            )
+
+    def test_uma_mensagem_interna_nunca_chega_ao_swap(self) -> None:
+        """O motivo da equipa é excluído na consulta, não só escondido no HTML.
+
+        O partial tem também uma guarda, e é ela que esconde a bolha. Se a
+        exclusão da consulta se perdesse, a conversa continuava escondendo o
+        diagnóstico e o defeito ficava à espera de alguém trocar o template —
+        por isso a medição é sobre as linhas devolvidas, não sobre o HTML.
+        """
+        ultima = self._perguntar("Qual é a renda?", after=None)
+        self.assertEqual(ultima.status_code, 200)
+        anterior = Message.objects.order_by("id").last().pk
+        interna = Message.objects.create(
+            conversation=self.conversation,
+            author=Message.Author.STAFF,
+            body="Erro técnico no assistente.",
+            is_escalation_notice=True,
+            is_internal=True,
+        )
+        self._perguntar("E agora?", after=anterior)
+
+        devolvidas = messages_after(self.conversation, after_id=anterior)
+
+        self.assertNotIn(interna.pk, [mensagem.pk for mensagem in devolvidas])
+        self.assertTrue(devolvidas, "o turno novo tem de vir mesmo com a interna a meio")
+
+
+class InternalEscalationReasonTests(TestCase):
+    """O motivo técnico da escalação é da equipa e não entra na conversa do cliente."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.user = make_user(email="escala@exemplo.ao")
+
+    def test_a_falha_do_modelo_nao_e_mostrada_ao_cliente(self) -> None:
+        """A degradação avisa o cliente; o diagnóstico fica na base de dados."""
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", side_effect=RuntimeError("ligação recusada")),
+        ):
+            result = ask(question="Qual é a renda?", user=self.user)
+
+        self.assertTrue(result.is_degraded)
+        conversation = Conversation.objects.get(pk=result.conversation_id)
+        visiveis = " ".join(
+            conversation.messages.filter(is_internal=False).values_list("body", flat=True)
+        )
+        internas = list(
+            conversation.messages.filter(is_internal=True).values_list("body", flat=True)
+        )
+        self.assertIn("Erro técnico no assistente.", internas)
+        self.assertNotIn("Erro técnico no assistente.", visiveis)
+        self.assertIn("Tive um problema técnico a responder.", visiveis)
+
+    def test_a_mensagem_do_assistente_desenhada_nao_traz_o_diagnostico(self) -> None:
+        """O partial da conversa não desenha uma mensagem interna."""
+        conversation = Conversation.objects.create(user=self.user)
+        Message.objects.create(
+            conversation=conversation,
+            author=Message.Author.STAFF,
+            body="Erro técnico no assistente.",
+            is_escalation_notice=True,
+            is_internal=True,
+        )
+        Message.objects.create(
+            conversation=conversation,
+            author=Message.Author.ASSISTANT,
+            body="Resposta que o cliente deve ler.",
+        )
+
+        html = render_to_string(
+            "assistant/_messages.html",
+            {"messages": list(conversation.messages.all())},
+        )
+
+        self.assertIn("Resposta que o cliente deve ler.", html)
+        self.assertNotIn("Erro técnico no assistente.", html)
+
+    def test_o_historico_enviado_ao_modelo_nao_traz_mensagens_internas(self) -> None:
+        """O modelo não aprende a responder com o texto escrito para a equipa."""
+        conversation = Conversation.objects.create(user=self.user)
+        Message.objects.create(
+            conversation=conversation,
+            author=Message.Author.STAFF,
+            body="Erro técnico no assistente.",
+            is_escalation_notice=True,
+            is_internal=True,
+        )
+        Message.objects.create(
+            conversation=conversation,
+            author=Message.Author.CLIENT,
+            body="Qual é a renda?",
+        )
+
+        historico = _history_for(conversation)
+
+        conteudos = [mensagem["content"] for mensagem in historico]
+        self.assertNotIn("Erro técnico no assistente.", conteudos)
+        self.assertEqual(conteudos, ["Qual é a renda?"])
+
+    def test_a_escalacao_mantem_o_motivo_e_o_aviso_separados(self) -> None:
+        """A conversa já escalada avisa o cliente e deixa o motivo à equipa."""
+        conversation = Conversation.objects.create(user=self.user)
+
+        with override_settings(ECHILO_AI_ENABLED=False):
+            primeira = ask(
+                question="Quero marcar uma visita para amanhã",
+                user=self.user,
+                conversation=conversation,
+            )
+        self.assertTrue(primeira.is_escalated)
+
+        with override_settings(ECHILO_AI_ENABLED=False):
+            segunda = ask(question="suprou", user=self.user, conversation=conversation)
+        self.assertTrue(segunda.is_escalated)
+
+        visiveis = list(
+            conversation.messages.filter(is_internal=False).values_list("body", flat=True)
+        )
+        internas = list(
+            conversation.messages.filter(is_internal=True).values_list("body", flat=True)
+        )
+        self.assertIn("A tua mensagem foi entregue à equipa do Echilo.", " ".join(visiveis))
+        self.assertIn(
+            "Mensagem recebida numa conversa já em acompanhamento humano.", internas
+        )

@@ -19,16 +19,49 @@ User = get_user_model()
 
 INTAKE_RATE_SCOPE = "concierge.owner_intake"
 
+# Quantas mensagens o HTMX acrescenta de uma vez. É um tecto de segurança contra
+# um cliente com o `after_id` atrasado a puxar a conversa inteira, não o número
+# de mensagens de um turno normal, que são sempre duas ou três.
+HISTORY_APPEND_LIMIT = 20
 
-def recent_messages(conversation: Conversation, *, limit: int) -> list[Message]:
+
+def recent_messages(
+    conversation: Conversation,
+    *,
+    limit: int,
+    include_internal: bool = False,
+) -> list[Message]:
     """Devolve as últimas mensagens por ordem cronológica.
 
     Django não aceita indexação negativa em QuerySets, por isso o corte é feito
-    pela ordenação inversa e revertido no fim.
+    pela ordenação inversa e revertido no fim. As mensagens internas ficam de
+    fora por omissão: quem lê isto é o cliente, e o motivo técnico da escalação
+    não é assunto dele.
     """
-    messages = list(conversation.messages.order_by("-id")[:limit])
+    messages = conversation.messages.order_by("-id")
+    if not include_internal:
+        messages = messages.filter(is_internal=False)
+    messages = list(messages[:limit])
     messages.reverse()
     return messages
+
+
+def messages_after(
+    conversation: Conversation,
+    *,
+    after_id: int,
+    limit: int = HISTORY_APPEND_LIMIT,
+) -> list[Message]:
+    """Devolve o que apareceu depois de um `id`, para acrescentar ao chat.
+
+    O HTMX acrescenta estas mensagens ao fim da conversa em vez de trocar o
+    `innerHTML` do contentor inteiro. Sem isto, responder substituía as 40
+    mensagens que a página tinha desenhado pelas 6 últimas e a conversa
+    perdia-se a cada turno.
+    """
+    return list(
+        conversation.messages.filter(id__gt=after_id, is_internal=False).order_by("id")[:limit]
+    )
 
 
 class IntakeThrottled(ValidationError):
@@ -154,8 +187,14 @@ def escalate_conversation(
     conversation: Conversation,
     reason: str,
     agent: User | None = None,
+    notice: str | None = None,
 ) -> Conversation:
-    """Move o atendimento para a equipa humana e regista o aviso na conversa (§2.4)."""
+    """Move o atendimento para a equipa humana e regista o motivo (§2.4).
+
+    O `reason` é para a equipa e fica interno; o `notice`, quando existe, é a
+    frase que o cliente lê. São coisas diferentes, e usar um só campo escrevia o
+    diagnóstico dentro da conversa.
+    """
     if conversation.status == Conversation.Status.RESOLVED:
         raise ValidationError("Esta conversa já foi encerrada.")
     conversation.status = Conversation.Status.ESCALATED
@@ -168,5 +207,13 @@ def escalate_conversation(
         author=Message.Author.STAFF,
         body=reason,
         is_escalation_notice=True,
+        is_internal=True,
     )
+    if notice:
+        Message.objects.create(
+            conversation=conversation,
+            author=Message.Author.STAFF,
+            body=notice,
+            is_escalation_notice=True,
+        )
     return conversation

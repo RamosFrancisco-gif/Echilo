@@ -73,19 +73,18 @@ def ask(
     Message.objects.create(conversation=conversation, author=Message.Author.CLIENT, body=question)
 
     if conversation.status == Conversation.Status.ESCALATED:
+        aviso = (
+            "A tua mensagem foi entregue à equipa do Echilo. Como o assunto já está "
+            "em acompanhamento humano, a partir daqui és atendido por eles."
+        )
         escalate_conversation(
             conversation=conversation,
-            reason=(
-                "A tua mensagem foi entregue à equipa do Echilo. Como o assunto já está "
-                "em acompanhamento humano, a partir daqui és atendido por eles."
-            ),
+            reason="Mensagem recebida numa conversa já em acompanhamento humano.",
+            notice=aviso,
             agent=None,
         )
         return TurnResult(
-            answer=(
-                "A tua mensagem foi entregue à equipa do Echilo. Como o assunto já está "
-                "em acompanhamento humano, a partir daqui és atendido por eles."
-            ),
+            answer=aviso,
             conversation_id=conversation.pk,
             is_escalated=True,
         )
