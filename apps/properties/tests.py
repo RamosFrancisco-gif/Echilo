@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs
 
+from django import forms
 from django.conf import settings
 from django.contrib.messages import get_messages
 from django.core.cache import cache
@@ -873,6 +874,20 @@ class CuratorActionTests(TestCase):
         self.assertIsNotNone(no_input)
         form = PropertyImageUploadForm()
         self.assertEqual(no_input.group(1), form.fields["images"].widget.attrs["accept"])
+
+    def test_o_input_das_fotografias_nao_oferece_apagar(self) -> None:
+        """O widget das fotografias é o que aceita várias, e não o que as apaga.
+
+        O `clean_images` do mixin lê `self.files` e ignora o que o widget devolve,
+        por isso a caixa de apagar do `ClearableFileInput` aparecia na página sem
+        destino: marcada, devolvia "este campo é obrigatório" em vez de apagar.
+        E o widget é recusado a partir de um patch do 4.2, que o `4.2` inicial
+        instalado aqui não recusa — por isso o erro só dava em produção.
+        """
+        widget = PropertyImageUploadForm().fields["images"].widget
+
+        self.assertNotIsInstance(widget, forms.ClearableFileInput)
+        self.assertTrue(widget.attrs["multiple"])
 
     def test_a_ficha_oferece_a_apagar_cada_fotografia(self) -> None:
         """Sem botão de apagar, um tecto de quinze é um muro sem volta."""

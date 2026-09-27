@@ -246,11 +246,15 @@ class ImagensDoImovelMixin(BaseStyledForm):
     Pillow consegue abrir.
     """
 
+    # `FileInput` e não `ClearableFileInput`: o Django recusa `multiple` no
+    # segundo a partir de um patch do 4.2, e o "Actualmente/Apagar" do primeiro
+    # não tem leitura nenhuma — o `clean_images` de baixo lê `self.files` e
+    # ignora o que o widget devolve. Marcada a caixa, a fotografia nem era
+    # apagada: dava "este campo é obrigatório". O `4.2` inicial aceitava
+    # `multiple` em silêncio, que é por isso que o erro só apareceu em produção.
     images = forms.FileField(
         label="Fotografias",
-        widget=forms.ClearableFileInput(
-            attrs={"multiple": True, "accept": MIME_IMAGEM_ACEITE}
-        ),
+        widget=forms.FileInput(attrs={"multiple": True, "accept": MIME_IMAGEM_ACEITE}),
         help_text=(
             f"Podem ser várias de uma vez, até {MAX_FOTOS} fotografias por imóvel. "
             f"A primeira é a capa. JPEG, PNG ou WebP, até {LIMITE_GB} MB cada."
