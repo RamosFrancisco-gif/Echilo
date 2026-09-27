@@ -54,7 +54,7 @@ from .services import (
     remove_image,
     resolve_owner,
 )
-from .validators import MAX_FOTOS, MIN_FOTOS, remaining_photo_slots
+from .validators import MAX_FOTOS, MIN_FOTOS, remaining_photo_slots, upload_config
 
 
 def ip_de_auditoria(request: HttpRequest) -> str | None:
@@ -285,6 +285,7 @@ class CuratorPropertyCreateView(FormView):
             "Só a equipa do Echilo regista imóveis. Confirme os dados já verificados "
             "durante a triagem antes de guardar."
         )
+        context.update(upload_config())
         return context
 
     def form_valid(self, form: PropertyCuratorForm) -> HttpResponseRedirect:
@@ -437,6 +438,7 @@ class CuratorPropertyDetailView(FormView):
                 # mais formatos do que o servidor aceita, e a pessoa descobre-o
                 # depois de escolher o ficheiro.
                 "aceite_imagens": MIME_IMAGEM_ACEITE,
+                **upload_config(),
                 # Apagar é a acção que não tem volta, e por isso a página diz o que
                 # a impede. Uma lista vazia de motivos é o que autoriza o botão; a
                 # regra é `motivos_para_recusar_apagar()` e a ficha não decide nada

@@ -36,7 +36,22 @@
         chega sem as fotografias e o formulário aceita-o como se não as tivesse
         escolhido — o registo fica sem fotografias e ninguém sabe porquê.
       {% endcomment %}
-      <form method="post" enctype="multipart/form-data" novalidate>
+      {% comment %}
+        O `data-orcamento-mb` e o `data-lado-maximo` são o contrato com o
+        `echilo.js`, e os números saem de `upload_config()`. O lote de
+        fotografias não cabe no pedido que a Vercel aceita — a edge recusa
+        corpos acima de 4,5 MB antes de o Django ver a requisição — e por isso o
+        peso resolve-se no browser, que é o único sítio onde o ficheiro ainda
+        está inteiro. Escritos à mão aqui, seriam um terceiro sítio com o mesmo
+        limite, e o que divergisse do Python era o que a Vercel recusava.
+
+        O `coordinate` não é opcional: a interface é `pt-AO` e o Django escreve
+        `3,5`, e o `parseFloat` do outro lado do atributo devolve `NaN` — o que
+        deixa a redução desligada sem dizer nada, e o 413 intacto (§2.13).
+      {% endcomment %}
+      <form method="post" enctype="multipart/form-data" novalidate
+            data-orcamento-mb="{{ orcamento_lote_mb|coordinate }}"
+            data-lado-maximo="{{ lado_maximo_cliente|coordinate }}">
         {% csrf_token %}
 
         {% if form.non_field_errors %}

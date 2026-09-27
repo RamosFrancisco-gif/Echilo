@@ -1815,6 +1815,280 @@
     });
   }
 
+  /* Reduz o lote de fotografias antes de o enviar (§2.1).
+
+     O formulário aceita até MAX_FOTOS fotografias de LIMITE_GB cada, e um lote
+     dessas não cabe no pedido que a Vercel aceita: a edge recusa corpos acima de
+     4,5 MB antes de o Django ver a requisição, e a resposta é um 413 sem página
+     nem traceback. Não há setting que abra aquilo, e a validação do Django nunca
+     chega a correr — o pedido morre na plataforma, um tecto antes do tecto.
+
+     Por isso o peso resolve-se aqui, no browser, que é o único sítio onde o
+     ficheiro ainda está inteiro. O `ORCAMENTO_LOTE_MB` e o `LADO_MAXIMO_CLIENTE`
+     chegam pelo `data-` do formulário e não são repetidos aqui: um número
+     escrito em dois sítios diverge, e o que diverge é o limite.
+
+     O que se perde: o tamanho. O que fica: a fotografia, e a ordem de escolha,
+     que é a ordem do array e é o que decide a capa. E o que este código não faz
+     é decidir se uma fotografia entra — quem valida é o servidor, ficheiro a
+     ficheiro, e quem recusa diz porquê. */
+  var QUALIDADES = [0.82, 0.72, 0.65, 0.58, 0.52, 0.45, 0.35];
+  var ESCALAS = [1, 1, 0.875, 0.75, 0.625, 0.56, 0.45];
+  var LADO_MINIMO = 560;
+
+  function mbParaBytes(mb) {
+    return Math.floor(mb * 1024 * 1024);
+  }
+
+  // A vírgula decimal é a de Angola (§2.13): o que o browser escreve num
+  // `textContent` é lido pela equipa, e «3.5 MB» ao lado de «3,5 MB» na ajuda
+  // do campo lê-se como duas medidas diferentes.
+  function mbLegivel(bytes) {
+    return (bytes / (1024 * 1024)).toFixed(1).replace('.', ',') + ' MB';
+  }
+
+  function nomeJpeg(original, usados) {
+    // O conteúdo passa a JPEG e o nome tem de dizer JPEG: o ficheiro é procurado
+    // pelo nome, e uma `sala.png` com bytes JPEG é uma fotografia que não
+    // reconhece quem a volta a abrir. O sufixo resolve a colisão de `sala.png`
+    // com `sala.jpg` escolhidos no mesmo lote.
+    var base = String(original || 'fotografia').replace(/\.[^.]+$/, '') || 'fotografia';
+    var nome = base + '.jpg';
+    var n = 2;
+    while (usados[nome]) {
+      nome = base + '-' + n + '.jpg';
+      n += 1;
+    }
+    usados[nome] = true;
+    return nome;
+  }
+
+  function descodificar(ficheiro) {
+    if (typeof createImageBitmap === 'function') {
+      return createImageBitmap(ficheiro).then(function (bitmap) {
+        return { largura: bitmap.width, altura: bitmap.height, fonte: bitmap };
+      });
+    }
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(ficheiro);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        resolve({ largura: img.naturalWidth, altura: img.naturalHeight, fonte: img });
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('a imagem não carregou'));
+      };
+      img.src = url;
+    });
+  }
+
+  function pintar(origem, largura, altura, qualidade) {
+    var canvas = document.createElement('canvas');
+    canvas.width = largura;
+    canvas.height = altura;
+    var ctx = canvas.getContext('2d');
+    // O JPEG não tem canal alfa: sem este fundo, o que era transparente sai
+    // preto, e uma fotografia com um recorte sobre-transparent é o caso em que
+    // isso se nota.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, largura, altura);
+    ctx.drawImage(origem.fonte, 0, 0, largura, altura);
+    return new Promise(function (resolve, reject) {
+      if (!canvas.toBlob) {
+        reject(new Error('o canvas não sabe exportar'));
+        return;
+      }
+      canvas.toBlob(function (blob) {
+        if (blob) resolve(blob);
+        else reject(new Error('a exportação veio vazia'));
+      }, 'image/jpeg', qualidade);
+    });
+  }
+
+  function reencodar(ficheiro, limite, ladoMaximo) {
+    // Já cabe: segue como está. Re-codificar o que já cabe só perderia qualidade,
+    // e o `lado_maximo` do servidor continua a ser o dele a dizer.
+    if (ficheiro.size <= limite) return Promise.resolve(ficheiro);
+
+    return descodificar(ficheiro).then(function (origem) {
+      var i = 0;
+      var melhor = null;
+
+      function degrau() {
+        if (i >= QUALIDADES.length) return Promise.resolve(melhor);
+        var lado = Math.max(LADO_MINIMO, Math.round(ladoMaximo * ESCALAS[i]));
+        var reducao = Math.min(1, lado / Math.max(origem.largura, origem.altura));
+        var largura = Math.max(1, Math.round(origem.largura * reducao));
+        var altura = Math.max(1, Math.round(origem.altura * reducao));
+        return pintar(origem, largura, altura, QUALIDADES[i]).then(function (blob) {
+          if (!melhor || blob.size < melhor.size) melhor = blob;
+          // O primeiro degrau que cabe é o que fica: mais agressivo custaria
+          // qualidade a uma fotografia que não precisava de a perder.
+          if (blob.size <= limite) return melhor;
+          i += 1;
+          return degrau();
+        });
+      }
+
+      return degrau().then(function (blob) {
+        // A imagem descodificada fica em memória até o browser a libertar, e
+        // quinze ao mesmo tempo é a diferença entre um lote que passa e um
+        // separador que morre.
+        if (origem.fonte && typeof origem.fonte.close === 'function') {
+          origem.fonte.close();
+        }
+        return blob || ficheiro;
+      });
+    });
+  }
+
+  function substituirFicheiros(input, ficheiros) {
+    // O `DataTransfer` é a única forma de escrever no `files` de um input: o
+    // atributo é de leitura para o script. Onde não existe — Safari antigo — a
+    // resposta é `false` e quem chama diz o que fazer, em vez de deixar passar um
+    // pedido que a plataforma recusa sem explicar.
+    if (typeof DataTransfer !== 'function') return false;
+    try {
+      var transporte = new DataTransfer();
+      ficheiros.forEach(function (f) {
+        transporte.items.add(f);
+      });
+      input.files = transporte.files;
+      // A atribuição pode ser aceite em silêncio e não escrever nada, por isso
+      // o que se confirma é o que ficou no input, e não o que se mandou fazer.
+      return input.files.length === ficheiros.length;
+    } catch (erro) {
+      return false;
+    }
+  }
+
+  function criarEstado(input) {
+    // A mensagem nasce depois do texto de ajuda e não antes: o `aria-describedby`
+    // do input aponta para a ajuda, e o campo não deve anunciar o estado do
+    // envio antes de dizer o que é o campo.
+    var alvo = input;
+    var descritos = (input.getAttribute('aria-describedby') || '').split(/\s+/);
+    for (var i = 0; i < descritos.length; i += 1) {
+      var apontado = document.getElementById(descritos[i]);
+      if (apontado) {
+        alvo = apontado;
+        break;
+      }
+    }
+    var p = document.createElement('p');
+    p.hidden = true;
+    alvo.parentNode.insertBefore(p, alvo.nextSibling);
+
+    return {
+      preparar: function () {
+        p.textContent = '';
+        p.hidden = true;
+        p.removeAttribute('role');
+        p.className = 'field__help';
+      },
+      // O progresso não entra num papel que o leitor de ecrã anuncie: «3 de 12»,
+      // «4 de 12», «5 de 12» lidos em voz alta são três interrupções para repetir
+      // o que o número já mostra no ecrã.
+      dizer: function (texto) {
+        p.textContent = texto;
+        p.className = 'field__help';
+        p.hidden = false;
+      },
+      terminar: function (texto, urgente) {
+        p.textContent = texto;
+        p.className = urgente ? 'field__error' : 'field__help';
+        p.setAttribute('role', urgente ? 'alert' : 'status');
+        p.hidden = false;
+      }
+    };
+  }
+
+  function setupCompressaoLote() {
+    var formularios = document.querySelectorAll('form[data-orcamento-mb]');
+    if (!formularios.length) return;
+
+    Array.prototype.forEach.call(formularios, function (form) {
+      var input = form.querySelector('input[type="file"][name="images"]');
+      if (!input) return;
+      var orcamento = mbParaBytes(parseFloat(form.getAttribute('data-orcamento-mb')) || 0);
+      var ladoMaximo = parseInt(form.getAttribute('data-lado-maximo'), 10) || 0;
+      if (!orcamento) return;
+      var aTratar = false;
+
+      form.addEventListener('submit', function (evento) {
+        // A guarda é o que impede o ciclo: o `form.submit()` de baixo não
+        // dispara este evento, mas o browser a validar no primeiro toque devolve
+        // o formulário ao mesmo caminho, e sem isto o que resolve o peso do lote
+        // voltava a entrar nele.
+        if (aTratar) return;
+        var ficheiros = Array.prototype.slice.call(input.files || []);
+        if (!ficheiros.length) return;
+
+        var total = ficheiros.reduce(function (soma, f) {
+          return soma + f.size;
+        }, 0);
+        // Cabe no pedido: não há peso a corrigir e nada a dizer à equipa.
+        if (total <= orcamento) return;
+
+        evento.preventDefault();
+        aTratar = true;
+        var botao = form.querySelector('button[type="submit"]');
+        if (botao) botao.disabled = true;
+        var estado = criarEstado(input);
+        estado.preparar();
+
+        var porFicheiro = Math.floor(orcamento / ficheiros.length);
+        var usados = {};
+        var reduzidos = [];
+        var indice = 0;
+
+        function proximo() {
+          if (indice >= ficheiros.length) return Promise.resolve();
+          var original = ficheiros[indice];
+          indice += 1;
+          estado.dizer('A reduzir as fotografias: ' + indice + ' de '
+            + ficheiros.length + '.');
+          return reencodar(original, porFicheiro, ladoMaximo).then(function (saida) {
+            reduzidos.push(saida === original
+              ? original
+              : new File([saida], nomeJpeg(original.name, usados), { type: 'image/jpeg' }));
+          }).catch(function () {
+            // Um ficheiro que este browser não conseguiu abrir segue como estava.
+            // Quem decide se uma fotografia entra é o servidor, e a recusa dele
+            // diz qual é o problema: um ficheiro mau não leva o lote consigo, e
+            // esta fotografia não entra nessa regra só por ter falhado aqui.
+            reduzidos.push(original);
+          }).then(proximo);
+        }
+
+        proximo().then(function () {
+          var final = reduzidos.reduce(function (soma, f) {
+            return soma + f.size;
+          }, 0);
+          aTratar = false;
+          if (final > orcamento) {
+            if (botao) botao.disabled = false;
+            estado.terminar('As ' + reduzidos.length + ' fotografias ainda somam '
+              + mbLegivel(final) + ' e o envio aceita ' + mbLegivel(orcamento)
+              + '. Escolha menos fotografias, ou menos de cada vez.', true);
+            return;
+          }
+          if (!substituirFicheiros(input, reduzidos)) {
+            if (botao) botao.disabled = false;
+            estado.terminar('Este navegador não deixa trocar as fotografias escolhidas. '
+              + 'Carregue menos de cada vez.', true);
+            return;
+          }
+          estado.terminar('Fotografias reduzidas de ' + mbLegivel(total) + ' para '
+            + mbLegivel(final) + '. A enviar…');
+          form.submit();
+        });
+      });
+    });
+  }
+
   function ready() {
     setupBurger();
     setupScopeTabs();
@@ -1828,6 +2102,7 @@
     setupPinPicker();
     setupConfirmacoes();
     setupCardCarousels();
+    setupCompressaoLote();
   }
 
   if (document.readyState === 'loading') {

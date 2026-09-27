@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import inspect
 import json
 import math
 import os
@@ -25,6 +27,7 @@ from django.urls import reverse
 from django.utils.datastructures import MultiValueDict
 
 from apps.core.geo import haversine_metres
+from apps.core.images import motivo_recusa_imagem
 from apps.core.pagination import PAGINA_PADRAO
 from apps.core.templatetags.echilo_format import coordinate
 from apps.core.testing import (
@@ -73,7 +76,13 @@ from apps.properties.reference import (
 from apps.properties.selectors import PropertyFilters, PropertyQueryService
 from apps.properties.admin import PropertyImageInlineFormSet
 from apps.properties.services import add_images, build_map_payload
-from apps.properties.validators import MAX_FOTOS, MIN_FOTOS
+from apps.properties.validators import (
+    LADO_MAXIMO_CLIENTE,
+    LIMITE_GB,
+    MAX_FOTOS,
+    MIN_FOTOS,
+    ORCAMENTO_LOTE_MB,
+)
 
 
 class PropertyPublicationTests(TestCase):
@@ -3509,3 +3518,213 @@ class CuratorDetailHistoryPaginationTests(TestCase):
 
         reasons = [event.reason for event in primeira.context["status_events"]]
         self.assertEqual(reasons[0], f"Transição {PAGINA_PADRAO:02d}")
+
+
+class ReducaoDoLoteTests(TestCase):
+    """O lote de fotografias é reduzido no browser porque a plataforma não o deixa passar.
+
+    O 413 que a equipa levava ao carregar no botão não era uma validação mal
+    escrita: a Vercel recusa corpos de pedido acima de 4,5 MB na edge, antes de o
+    Django ver a requisição, e responde com um 413 sem página nem traceback.
+    Nenhuma validação no servidor chega a esse caminho — o pedido morre um tecto
+    antes do tecto — e nenhuma configuração o abre.
+    """
+
+    # O limite da plataforma. Vive no teste e não no código de produção porque é
+    # uma propriedade do deploy e não do produto: mudá-lo é mudar a Vercel, e o
+    # número que o código usa é uma decisão nossa com espaço para variar.
+    LIMITE_PEDIDO_MB = 4.5
+
+    # O que uma fotografia a 1600 px pesa com qualidade honesta. Serve de chão ao
+    # orçamento por ficheiro: com o lote cheio, a escada não deve ter de cair até
+    # ao último degrau, que é o que se vê quando as fotografias vão todas estragadas.
+    PESO_ACEITAVEL_KB = 128
+
+    def setUp(self) -> None:
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            status=Property.Status.DRAFT,
+        )
+        self.criar = reverse("properties:curator_create")
+        self.ficha = reverse("properties:curator_detail", args=[self.prop.reference])
+
+    def _js_limpo(self) -> str:
+        """O `echilo.js` sem os comentários.
+
+        O bloco da redução explica que o orçamento é o do Python e porquê, e
+        escreve os dois números em prosa. Procurar o valor no ficheiro inteiro
+        acusaria o próprio teste de estar errado, e o próximo que o lesse
+        deixava de lhe dar crédito.
+        """
+        js = (Path(settings.BASE_DIR) / "static" / "js" / "echilo.js").read_text(
+            encoding="utf-8"
+        )
+        return re.sub(r"/\*.*?\*/|//[^\n]*", "", js, flags=re.DOTALL)
+
+    def test_o_orcamento_cabe_no_pedido_que_a_plataforma_aceita(self) -> None:
+        """O orçamento tem de ser menor que o limite da Vercel, e por margem.
+
+        É este o teste que teria apanhado o 413. Subir `ORCAMENTO_LOTE_MB` para o
+        valor de `LIMITE_GB` — que é o número que se lê no campo e o que parece o
+        certo — é exactamente o erro: 5 MB de um lado e 4,5 do outro, e a
+        diferença devolve um 413 sem explicação. A margem existe para as
+        fronteiras do multipart e para o resto do formulário, que também pesam.
+        """
+        self.assertLess(ORCAMENTO_LOTE_MB, self.LIMITE_PEDIDO_MB)
+        self.assertLessEqual(ORCAMENTO_LOTE_MB, self.LIMITE_PEDIDO_MB - 0.5)
+
+    def test_o_orcamento_divide_pelo_lote_cheio_sem_estragar_as_fotografias(self) -> None:
+        """Com quinze fotografias, cada uma ainda tem peso para uma qualidade honesta.
+
+        O orçamento por ficheiro é o orçamento dividido pelo número de
+        fotografias, e é esse o valor que a escada do browser persegue. Se o
+        orçamento for tal que a última fotografia obriga ao degrau mais degradado
+        da escada, o efeito é quinze imagens poorer para caber — e o que se
+        perdeu foi a fotografia, que era o que esta correcção devia salvar.
+        """
+        por_ficheiro = ORCAMENTO_LOTE_MB * 1024 * 1024 / MAX_FOTOS
+        self.assertGreaterEqual(
+            por_ficheiro / 1024,
+            self.PESO_ACEITAVEL_KB,
+            "o orçamento por ficheiro não dá para uma fotografia a 1600 px decente",
+        )
+
+    def test_o_lado_maximo_do_cliente_cabe_no_que_o_servidor_aceita(self) -> None:
+        """O browser reconstrói abaixo do tecto do servidor, e o tecto é o do servidor.
+
+        O valor vem da assinatura de `motivo_recusa_imagem` e não de um número
+        escrito aqui: se o servidor subir o lado máximo, o teste segue-o, e se o
+        browser o subir acima do servidor a fotografia é recusada depois de a
+        equipa a ter carregado.
+        """
+        lado_do_servidor = inspect.signature(motivo_recusa_imagem).parameters[
+            "lado_maximo"
+        ].default
+        self.assertLessEqual(LADO_MAXIMO_CLIENTE, lado_do_servidor)
+        self.assertGreater(LADO_MAXIMO_CLIENTE, 0)
+
+    def test_uma_fotografia_reduzida_e_aceite_como_entra(self) -> None:
+        """O que o browser produz tem de passar na validação do servidor.
+
+        A redução converte tudo em JPEG e o ficheiro passa a chamar-se `.jpg`.
+        Se o servidor deixar de farejar o conteúdo e passar a olhar para o nome,
+        ou a recusar o JPEG por ser uma re-codificação, a equipa volta a não
+        conseguir carregar o lote — e a única resposta que recebe é o 413.
+        """
+        from PIL import Image
+
+        original = Image.new("RGB", (4000, 3000), (40, 32, 22))
+        buffer = io.BytesIO()
+        original.save(buffer, format="PNG")
+        reduzido = Image.open(io.BytesIO(buffer.getvalue()))
+        reduzido.thumbnail((LADO_MAXIMO_CLIENTE, LADO_MAXIMO_CLIENTE))
+        saida = io.BytesIO()
+        reduzido.convert("RGB").save(saida, format="JPEG", quality=45)
+
+        ficheiro = SimpleUploadedFile(
+            "sala.png", saida.getvalue(), content_type="image/jpeg"
+        )
+        self.assertIsNone(
+            motivo_recusa_imagem(ficheiro, limite_mb=LIMITE_GB),
+            "a fotografia reduzida tem de entrar como entra qualquer outra",
+        )
+
+    def test_as_duas_paginas_publicam_o_mesmo_orcamento(self) -> None:
+        """O cadastro e a ficha entregam ao JavaScript o orçamento de Python.
+
+        O `accept` e o `name` do input já são o mesmo contrato nos dois sítios, e
+        o orçamento entra pela mesma via. Uma das páginas com o número em falta é
+        uma página onde a equipa escolhe quinze fotografias e recebe um 413 sem
+        que nada no ecrã diga que havia um limite.
+        """
+        self.client.force_login(self.curator)
+        for url in (self.criar, self.ficha):
+            with self.subTest(url=url):
+                resposta = self.client.get(url)
+                self.assertEqual(resposta.status_code, 200)
+                html = resposta.content.decode("utf-8")
+                self.assertIn('name="images"', html)
+                for atributo, esperado in (
+                    ("data-orcamento-mb", ORCAMENTO_LOTE_MB),
+                    ("data-lado-maximo", LADO_MAXIMO_CLIENTE),
+                ):
+                    with self.subTest(atributo=atributo):
+                        escrito = self._atributo(html, atributo)
+                        # O valor viaja, e o que viaja tem de sair invariante
+                        # (§2.13). A interface é `pt-AO`: escrito à mão, o
+                        # Django põe `3,5` e o `parseFloat` do `echilo.js` dá
+                        # `NaN`, o orçamento lê-se como zero e a compressing
+                        # nunca arranca — sem erro na consola e com o 413 intacto.
+                        self.assertNotIn(",", escrito)
+                        self.assertEqual(float(escrito), float(esperado))
+
+    def _atributo(self, html: str, nome: str) -> str:
+        """O valor de um atributo de formulário, como o browser o leria."""
+        encontrado = re.search(r'%s="([^"]*)"' % re.escape(nome), html)
+        self.assertIsNotNone(encontrado, "%s não está na página" % nome)
+        return encontrado.group(1)  # type: ignore[union-attr]
+
+    def test_o_javascript_nao_escreve_o_orcamento_de_vez(self) -> None:
+        """O número vive em Python; o JavaScript lê o que a página lhe deu.
+
+        Um valor repetido no `echilo.js` seria uma segunda verdade, e a segunda é
+        a que ninguém actualiza. E aqui a divergência não é um ecrã desatualizado:
+        é o `413` a voltar, porque o `echilo.js` a reduzir para 5 MB e a plataforma
+        a recusar a partir de 4,5.
+        """
+        js = self._js_limpo()
+        self.assertIn("data-orcamento-mb", js)
+        self.assertIn("data-lado-maximo", js)
+        self.assertNotIn(str(ORCAMENTO_LOTE_MB), js)
+        self.assertNotIn(str(LADO_MAXIMO_CLIENTE), js)
+
+    def test_a_reducao_preserva_a_ordem_que_decide_a_capa(self) -> None:
+        """A ordem de escolha é a ordem de envio, e a primeira continua a ser a capa.
+
+        O `add_images` numera pela posição do lote recebido, e é essa posição que
+        decide a capa. Uma redução que ordenasse, ou que despachasse o lote em
+        paralelo a junta por ordem de resposta, trocava a capa sem dar erro: o
+        imóvelpublicava-se com a fotografia errada em primeiro, e ninguém via
+        nada de errado.
+        """
+        js = self._js_limpo()
+        # Uma de cada vez, pela ordem do array: cada uma só chama a seguinte
+        # quando a anterior acabou.
+        self.assertIn(".then(proximo)", js)
+        self.assertIsNone(
+            re.search(r"\.sort\(|reduzidos\.reverse\(", js),
+            "a ordem do lote é a ordem de escolha e não se ordena",
+        )
+
+    def test_o_que_nao_cabe_e_recusado_antes_de_chegar_a_plataforma(self) -> None:
+        """Um lote que ainda não cabe é recusado com uma frase, não enviado para o 413.
+
+        O último degrau da escada raramente chega, e raramente não é nenhum. Quando
+        não chega, a equipa tem de ler o que há a fazer — escolher menos — em vez
+        de ver um 413 que não diz qual é o limite. E a recusa acontece com o
+        botão outra vez disponível, senão o formulário fica preso.
+        """
+        js = self._js_limpo()
+        self.assertIn("final > orcamento", js)
+        self.assertIn("Escolha menos fotografias", js)
+        self.assertIn("botao.disabled = false", js)
+        # Um único `form.submit()`, e no caminho que depois da redução: um segundo
+        # envio é um `form.submit()` dentro da recusa, e é o 413 com mais um
+        # botão a não fazer nada.
+        self.assertEqual(js.count("form.submit()"), 1)
+
+    def test_a_progresso_nao_e_anunciado_a_cada_fotografia(self) -> None:
+        """O contador de progresso não é um papel que o leitor de ecrã anuncie.
+
+        Quinze «3 de 12», «4 de 12» lidos em voz alta são quinze interrupções para
+        repetir o que o número já mostra no ecrã. O papel vivo entra na
+        mensagem final, que é a que tem algo a dizer.
+        """
+        js = self._js_limpo()
+        bloco = js[js.index("function criarEstado") : js.index("function setupCompressaoLote")]
+        dizer = bloco[bloco.index("dizer: function") : bloco.index("terminar: function")]
+        self.assertNotIn("setAttribute('role'", dizer)
+        self.assertIn("setAttribute('role'", bloco)
