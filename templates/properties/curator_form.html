@@ -1,7 +1,23 @@
 {% extends "base.html" %}
 {% load echilo_format %}
+{% load static %}
 
 {% block title %}{{ form_title }} — painel interno{% endblock %}
+
+{% block head_extra %}
+  {% comment %}
+    A ficha de curadoria também carrega o mapa, e paga por isso. É o preço de
+    poder largar o pin sem escrever oito casas decimais à mão — que é o que
+    acontecia antes deste mapa, e o erro de dedo ia parar ao catálogo.
+
+    Os scripts vão no `head`, e com `defer`: o `ready()` do nosso código dispara
+    de imediato quando vem depois deles, e uma biblioteca carregada mais tarde
+    no corpo ainda não estaria pronta. O `defer` não garante a ordem entre
+    scripts, garante que a nossa `DOMContentLoaded` espera pelo `defer` deles.
+  {% endcomment %}
+  <link rel="stylesheet" href="{% static 'vendor/leaflet/1.9.4/leaflet.css' %}">
+  <script src="{% static 'vendor/leaflet/1.9.4/leaflet.js' %}" defer></script>
+{% endblock %}
 
 {% block body_attrs %} data-municipality-options="{{ municipality_options_url }}"{% endblock %}
 
@@ -15,7 +31,12 @@
     </div>
 
     <div class="sidebar-card" data-reveal="scale">
-      <form method="post" novalidate>
+      {% comment %}
+        O `enctype` é o que faz o browser enviar os ficheiros. Sem ele o pedido
+        chega sem as fotografias e o formulário aceita-o como se não as tivesse
+        escolhido — o registo fica sem fotografias e ninguém sabe porquê.
+      {% endcomment %}
+      <form method="post" enctype="multipart/form-data" novalidate>
         {% csrf_token %}
 
         {% if form.non_field_errors %}
@@ -70,6 +91,9 @@
             {% include "partials/form_field.html" with field=form.locality %}
             {% include "partials/form_field.html" with field=form.address_hint %}
           </div>
+
+          {% include "partials/pin_map.html" %}
+
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.latitude %}
             {% include "partials/form_field.html" with field=form.longitude %}
@@ -77,6 +101,24 @@
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.location_accuracy_m %}
             {% include "partials/form_field.html" with field=form.map_reference %}
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Fotografias</legend>
+          {% comment %}
+            O input escreve o `name` que o formulário espera, e o `accept` sai do
+            mesmo sítio do formulário. Escritos à mão, o input oferece um formato
+            que o servidor recusa — e a pessoa descobre-o depois de escolher o
+            ficheiro.
+          {% endcomment %}
+          <div class="field">
+            <label class="label" for="{{ form.images.id_for_label }}">{{ form.images.label }}</label>
+            {{ form.images }}
+            <span class="field__help">{{ form.images.help_text }}</span>
+            {% for error in form.images.errors %}
+              <span class="field__error" role="alert">{{ error }}</span>
+            {% endfor %}
           </div>
         </fieldset>
 

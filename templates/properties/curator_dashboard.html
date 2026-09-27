@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Curadoria - imóveis{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <div class="section__head" data-reveal>
+      <div>
+        <span class="eyebrow">Área da equipa</span>
+        <h2>Imóveis em curadoria</h2>
+        <p>{{ total_equipa }} imóvel(is) registados. Escolha um para abrir a ficha, triagem e fotografias.</p>
+      </div>
+      <a class="btn btn--primary" href="{% url 'properties:curator_create' %}">Registar imóvel</a>
+    </div>
+
+    <form class="chip-row mb-18" method="get">
+      <a class="badge{% if not estado_activo %} badge--gold{% endif %}"
+         href="{% url 'properties:curator_dashboard' %}">Todos</a>
+      {% for estado in estados %}
+        <a class="badge{% if estado_activo == estado.valor %} badge--gold{% endif %}"
+           href="?estado={{ estado.valor }}">{{ estado.nome }} ({{ estado.total }})</a>
+      {% endfor %}
+    </form>
+
+    {% if properties %}
+      <ul class="table-list" role="list">
+        {% for prop in properties %}
+          <li class="table-list__row">
+            <div>
+              <span class="eyebrow">{{ prop.reference }}</span>
+              <a class="table-list__title"
+                 href="{% url 'properties:curator_detail' prop.reference %}">{{ prop.title }}</a>
+              <p class="text-muted t-sm">
+                {{ prop.get_type_display }} · {{ prop.get_purpose_display }}
+                {% if prop.curated_by %} · curador {{ prop.curated_by.full_name }}{% endif %}
+              </p>
+            </div>
+            <div class="table-list__meta">
+              <span class="badge badge--muted">{{ prop.get_status_display }}</span>
+              <span class="text-muted-2 t-xs">{{ prop.created_at|date:"d/m/Y" }}</span>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+
+      {% if is_paginated %}
+        <nav class="pagination" aria-label="Paginação dos imóveis">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--sm" href="?{% if estado_activo %}estado={{ estado_activo }}&amp;{% endif %}page={{ page_obj.previous_page_number }}">Anterior</a>
+          {% endif %}
+          <span class="text-muted t-sm">Página {{ page_obj.number }} de {{ paginator.num_pages }}</span>
+          {% if page_obj.has_next %}
+            <a class="btn btn--sm" href="?{% if estado_activo %}estado={{ estado_activo }}&amp;{% endif %}page={{ page_obj.next_page_number }}">Seguinte</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        <h3>{% if estado_activo %}Nenhum imóvel neste estado{% else %}Ainda não há imóveis registados{% endif %}</h3>
+        <p>
+          {% if estado_activo %}
+            Escolha outro estado acima, ou volte a todos.
+          {% else %}
+            Comece por registar o primeiro imóvel depois da triagem com o proprietário.
+          {% endif %}
+        </p>
+        <a class="btn btn--primary mt-12" href="{% url 'properties:curator_create' %}">Registar imóvel</a>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

@@ -1,4 +1,4 @@
-{% load static %}
+{% load static navigation_tags %}
 <header class="nav">
   <div class="wrap nav__inner">
     <a class="logo" href="{% url 'properties:home' %}" aria-label="Echilo, página inicial">
@@ -6,17 +6,37 @@
     </a>
 
     <nav class="nav__links" aria-label="Navegação principal">
-      <a href="{% url 'properties:property_list' %}?purpose=RENT"{% if request.GET.purpose == 'RENT' %} aria-current="page"{% endif %}>Arrendar</a>
-      <a href="{% url 'properties:property_list' %}?purpose=SALE"{% if request.GET.purpose == 'SALE' %} aria-current="page"{% endif %}>Comprar</a>
-      <a href="{% url 'properties:property_list' %}?type=LAND"{% if request.GET.type == 'LAND' %} aria-current="page"{% endif %}>Terrenos</a>
-      <a href="{% url 'properties:home' %}#como-funciona"{% if request.resolver_match.url_name == 'home' %} aria-current="page"{% endif %}>Como funciona</a>
-      <a href="{% url 'assistant:chat' %}">Assistente</a>
+      {% menu as menu_items %}
+      {% for item in menu_items %}
+        {% if item.is_group %}
+          <details class="nav__group">
+            <summary class="nav__group-label{% if item.is_current %} is-current{% endif %}">
+              {{ item.label }}
+              <svg class="nav__group-caret" viewBox="0 0 12 8" aria-hidden="true" focusable="false">
+                <path d="M1 1.5 6 6.5 11 1.5" fill="none" stroke="currentColor" stroke-width="1.6"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </summary>
+            <div class="nav__submenu">
+              {% for link in item.links %}
+                <a href="{{ link.url }}"{% if link.is_current %} aria-current="page"{% endif %}>{{ link.label }}</a>
+              {% endfor %}
+            </div>
+          </details>
+        {% else %}
+          <a href="{{ item.url }}"{% if item.is_current %} aria-current="page" class="is-current"{% endif %}>{{ item.label }}</a>
+        {% endif %}
+      {% endfor %}
     </nav>
 
     <div class="nav__actions">
       {% if current_user.is_authenticated %}
-        <a class="user-chip" href="{% url 'properties:property_list' %}">
-          <span class="user-chip__avatar" aria-hidden="true">{{ current_user.initials }}</span>
+        {% comment %}
+          O avatar é o alvo do perfil. Antes apontava para o catálogo, que é a
+          segunda página de qualquer pessoa e não tem nada a ver com a conta.
+        {% endcomment %}
+        <a class="user-chip" href="{% url 'accounts:profile' %}">
+          {% include "partials/avatar.html" with user=current_user css_class="user-chip__avatar" %}
           <span>{{ current_user.full_name|truncatechars:18 }}</span>
         </a>
         <form method="post" action="{% url 'accounts:logout' %}">
@@ -39,15 +59,34 @@
     </button>
   </div>
 
+  {% comment %}
+    No telemóvel os ramos não descem: mostram-se o nome e as filhas em linha
+    dentro do menu. É por isso que aqui não há submenu, e sim o rótulo do ramo
+    seguido das ligações.
+  {% endcomment %}
   <div class="nav__menu" id="nav-menu">
     <div class="nav__menu-inner">
-      <a href="{% url 'properties:property_list' %}?purpose=RENT">Arrendar</a>
-      <a href="{% url 'properties:property_list' %}?purpose=SALE">Comprar</a>
-      <a href="{% url 'properties:property_list' %}?type=LAND">Terrenos</a>
-      <a href="{% url 'properties:home' %}#como-funciona">Como funciona</a>
-      <a href="{% url 'assistant:chat' %}">Assistente</a>
+      {% for item in menu_items %}
+        {% if item.is_group %}
+          <div class="nav__menu-group">
+            <span class="nav__menu-group-label">{{ item.label }}</span>
+            {% for link in item.links %}
+              <a href="{{ link.url }}"{% if link.is_current %} aria-current="page"{% endif %}>{{ link.label }}</a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <a href="{{ item.url }}"{% if item.is_current %} aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% endif %}
+      {% endfor %}
       <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
       {% if current_user.is_authenticated %}
+        {% comment %}
+          O avatar do cabeçalho desaparece atrás do botão do telemóvel, e sem
+          esta ligação o perfil só se alcançava num ecrã largo — a página existe
+          para toda a gente com sessão, incluindo quem chega por um link partilhado
+          num telefone.
+        {% endcomment %}
+        <a class="btn" href="{% url 'accounts:profile' %}">O seu perfil</a>
         <form method="post" action="{% url 'accounts:logout' %}">
           {% csrf_token %}
           <button type="submit" class="btn">Sair da conta</button>

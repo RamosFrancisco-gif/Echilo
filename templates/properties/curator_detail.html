@@ -1,7 +1,18 @@
 {% extends "base.html" %}
 {% load echilo_format %}
+{% load static %}
 
 {% block title %}{{ property.reference }} — curadoria{% endblock %}
+
+{% block head_extra %}
+  {% comment %}
+    A ficha carrega o Leaflet pela mesma razão que o cadastro: é aqui que se
+    corrige um pin que a inspecção de satélite pôs no sítio errado, e hacerlo
+    escrevendo coordenadas à mão é onde nascem os pins de Luanda em Benguela.
+  {% endcomment %}
+  <link rel="stylesheet" href="{% static 'vendor/leaflet/1.9.4/leaflet.css' %}">
+  <script src="{% static 'vendor/leaflet/1.9.4/leaflet.js' %}" defer></script>
+{% endblock %}
 
 {% block body_attrs %} data-municipality-options="{{ municipality_options_url }}"{% endblock %}
 
@@ -89,7 +100,7 @@
     <div class="detail detail--aside" data-reveal>
       <div class="sidebar-card">
         <h3>Alterar dados do imóvel</h3>
-        <form method="post" novalidate class="mt-18">
+        <form method="post" novalidate class="mt-18" id="ficha-edicao">
           {% csrf_token %}
 
           {% if form.non_field_errors %}
@@ -113,9 +124,23 @@
             {% include "partials/form_field.html" with field=form.municipality %}
           </div>
           {% include "partials/municipality_datalist.html" %}
+          {% include "partials/form_field.html" with field=form.locality %}
+
+          {% include "partials/pin_map.html" %}
+
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.latitude %}
             {% include "partials/form_field.html" with field=form.longitude %}
+          </div>
+          {% comment %}
+            A precisão e a referência andam com o pin. A ficha que as mostras só
+            com duas delas aparecia como um formulário que sabia onde o imóvel
+            estava mas não dizia com que confiança, que é a diferença entre um
+            ponto confirmado e uma coordenada colada de qualquer lado.
+          {% endcomment %}
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.location_accuracy_m %}
+            {% include "partials/form_field.html" with field=form.map_reference %}
           </div>
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.bedrooms %}
@@ -131,18 +156,19 @@
           <h3>Mudar de estado</h3>
           <p>Todas as transições ficam registadas em {{ property.reference }}.</p>
 
-          {% if allowed_transitions %}
+          {% if transition_form.ha_transicoes %}
             <form method="post" action="{% url 'properties:curator_transition' property.reference %}" class="form-stack">
               {% csrf_token %}
               <div class="field">
                 <label class="label" for="to_status">Novo estado</label>
                 <select class="field-control" name="to_status" id="to_status" required>
-                  {% for code, label in allowed_transitions %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+                  {% for code, label in transition_form.fields.to_status.choices %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
                 </select>
               </div>
               <div class="field">
                 <label class="label" for="reason">Justificação</label>
-                <input class="field-control" type="text" name="reason" id="reason" maxlength="240" placeholder="Obrigatória em publicação e arquivo">
+                <input class="field-control" type="text" name="reason" id="reason" maxlength="240" placeholder="Obrigatória em publicação e arquivo"{% if transition_form.razao_e_sempre_obrigatoria %} required{% endif %}>
+                <span class="field__help">Fica registada no histórico do imóvel.</span>
               </div>
               <button class="btn btn--primary btn--block" type="submit">Aplicar transição</button>
             </form>
@@ -151,17 +177,74 @@
           {% endif %}
         </div>
 
-        <div class="sidebar-card mt-16">
-          <h3>Fotografias ({{ property.images.count }})</h3>
-          <p>Mínimo de 5 para a triagem fechar.</p>
-          <form method="post" action="{% url 'properties:curator_images' property.reference %}" enctype="multipart/form-data" class="form-stack">
-            {% csrf_token %}
-            <div class="field">
-              <label class="label" for="foto">Adicionar fotografia</label>
-              <input class="field-control" type="file" name="foto" id="foto" accept="image/*" required>
-            </div>
-            <button class="btn btn--block" type="submit">Carregar</button>
-          </form>
+        <div class="sidebar-card mt-16" id="fotografias">
+          <h3>Fotografias ({{ property.images.count }} de {{ max_fotos }})</h3>
+          <p>Mínimo de {{ min_fotos }} para a triagem fechar.</p>
+
+          {% if property.images.all %}
+            <ul class="photo-grid" role="list">
+              {% for foto in property.images.all %}
+                <li class="photo-grid__item">
+                  <img class="photo-grid__img"
+                       src="{{ foto.image.url }}"
+                       alt="{{ property.title }}, fotografia {{ forloop.counter }} de {{ property.images.count }}"
+                       width="320" height="240" loading="lazy">
+                  {% if forloop.first %}
+                    <span class="badge badge--ok">Capa</span>
+                  {% endif %}
+                  <form method="post"
+                        action="{% url 'properties:curator_image_delete' property.reference foto.id %}">
+                    {% csrf_token %}
+                    <button class="btn btn--sm" type="submit"
+                            data-confirmar-titulo="Apagar fotografia"
+                            data-confirmar-ok="Apagar"
+                            {% if forloop.first %}
+                            data-confirmar="Apagar a capa? A fotografia seguinte passa a ser a capa."
+                            {% else %}
+                            data-confirmar="Apagar esta fotografia? A capa não muda."
+                            {% endif %}>
+                      Apagar
+                    </button>
+                  </form>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="text-muted-2">Ainda sem fotografias.</p>
+          {% endif %}
+
+          {% if fotos_livres > 0 %}
+            <form method="post" action="{% url 'properties:curator_images' property.reference %}" enctype="multipart/form-data" class="form-stack">
+              {% csrf_token %}
+              <div class="field">
+                <label class="label" for="id_images">
+                  {% if fotos_livres == 1 %}Fotografia{% else %}Fotografias{% endif %}
+                </label>
+                <input class="field-control"
+                       type="file"
+                       name="images"
+                       id="id_images"
+                       accept="{{ aceite_imagens }}"
+                       aria-describedby="id_images_help"
+                       {% if fotos_livres > 1 %}multiple{% endif %}
+                       required>
+                <span class="field__help" id="id_images_help">
+                  {% if fotos_livres > 1 %}
+                    Pode escolher até {{ fotos_livres }} de uma vez.
+                  {% endif %}
+                  A primeira é a capa. JPEG, PNG ou WebP, até 5&nbsp;MB cada.
+                </span>
+              </div>
+              <button class="btn btn--block" type="submit">
+                {% if fotos_livres > 1 %}Carregar fotografias{% else %}Carregar fotografia{% endif %}
+              </button>
+            </form>
+          {% else %}
+            <p class="text-muted-2">
+              Este imóvel tem as {{ max_fotos }} fotografias. Apague uma para
+              dar lugar a outra.
+            </p>
+          {% endif %}
         </div>
 
         <div class="sidebar-card mt-16">
@@ -181,6 +264,82 @@
               <li>Sem transições registadas.</li>
             {% endfor %}
           </ul>
+        </div>
+        <div class="sidebar-card mt-16" id="apagar">
+          <h3>Apagar imóvel</h3>
+          {% comment %}
+            Arquivar está acima, no cartão do estado, e é a forma correcta de tirar
+            um imóvel do catálogo: o histórico fica. Isto é o que não tem volta, e a
+            página diz isso antes de oferecer o formulário, porque a diferença entre
+            as duas acções é a diferença entre um botão e um erro.
+          {% endcomment %}
+          <p>
+            Arquive o imóvel se o problema for tê-lo no catálogo. Apagar remove a
+            ficha, as fotografias e a documentação, e não há como recuperar.
+          </p>
+
+          {% if motivos_sem_apagar %}
+            <div class="alert alert--info" role="status">
+              <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+              <span>
+                {% for motivo in motivos_sem_apagar %}{{ motivo }}{% endfor %}
+              </span>
+            </div>
+          {% elif not pode_apagar %}
+            <p class="text-muted-2">
+              Apagar imóveis exige perfil de agente ou administrador.
+            </p>
+          {% else %}
+            <form method="post"
+                  action="{% url 'properties:curator_delete' property.reference %}"
+                  class="form-stack">
+              {% csrf_token %}
+
+              <div class="field">
+                <label class="label" for="id_delete_reference">Referência do imóvel</label>
+                <input class="field-control"
+                       type="text"
+                       name="reference"
+                       id="id_delete_reference"
+                       value="{{ property.reference }}"
+                       maxlength="32"
+                       autocomplete="off"
+                       spellcheck="false"
+                       required>
+                <span class="field__help">
+                  Escreva a referência para confirmar. O imóvel a apagar é
+                  {{ property.reference }}.
+                </span>
+              </div>
+
+              <div class="field{% if delete_form.reason.errors %} has-error{% endif %}">
+                <label class="label" for="id_delete_reason">Motivo do apagamento</label>
+                <textarea class="field-control"
+                          name="reason"
+                          id="id_delete_reason"
+                          rows="3"
+                          maxlength="500"
+                          required>{% if delete_form.reason.value %}{{ delete_form.reason.value }}{% endif %}</textarea>
+                <span class="field__help">
+                  Fica registado com o seu nome e a data, mesmo depois de o imóvel
+                  deixar de existir.
+                </span>
+                {% for error in delete_form.reason.errors %}
+                  <span class="field__error" role="alert">
+                    <svg class="i t-sm" aria-hidden="t-sm"><use href="#alert"/></svg>
+                    {{ error }}
+                  </span>
+                {% endfor %}
+              </div>
+
+              <button class="btn btn--danger btn--block" type="submit"
+                      data-confirmar-titulo="Apagar imóvel"
+                      data-confirmar-ok="Apagar imóvel"
+                      data-confirmar="Apagar {{ property.reference }}? A ficha, as fotografias e a documentação vão todas. Não há como recuperar.">
+                Apagar {{ property.reference }}
+              </button>
+            </form>
+          {% endif %}
         </div>
       </aside>
     </div>

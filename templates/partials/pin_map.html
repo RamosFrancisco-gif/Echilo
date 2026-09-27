@@ -1,0 +1,93 @@
+{% load echilo_format provincia %}
+{% comment %}
+  Seletor de pin da ficha de curadoria (§2.3).
+
+  A localização nunca é só texto, e nunca vem da morada que o proprietário
+  escreveu: é o ponto que a equipa inspeccionou por satélite. Este mapa é onde a
+  equipa larga esse ponto, com duas mãos: carregando no chão, ou dizendo onde
+  está com o próprio corpo através da geolocalização.
+
+  Fica num partial porque há duas fichas que precisam dele — o cadastro e a
+  edição interna — e porque as duas têm de escrever os mesmos campos. Duas
+  cópias divergem, e a segunda deixa de marcar o imóvel.
+
+  O que o mapa escreve é sempre com ponto decimal e seis casas (§2.13), que é o
+  que `Decimal` lê. Um valor que viaja tem de sair invariante.
+{% endcomment %}
+<section class="pin-map" aria-labelledby="pin-map-title">
+  <div class="pin-map__head">
+    <span class="eyebrow">Localização por satélite</span>
+    <h3 id="pin-map-title">Onde está exactamente</h3>
+    <p>
+      Carregue no mapa para largar o pin, ou arraste-o para afinar. Se estiver no
+      imóvel, use a sua posição actual. O ponto é o que a equipa confirmou, e
+      nunca a morada escrita pelo proprietário.
+    </p>
+  </div>
+
+  {{ map_config|json_script:"pin-map-config" }}
+
+  <div class="pin-map__body">
+    {% comment %}
+      O botão vive dentro do contentor do mapa, e não no painel ao lado, para
+      ficar debaixo dos olhos de quem está a olhar para o mapa. O Leaflet
+      acrescenta as suas camadas sem limpar o que já lá está.
+
+      O nome visível é a frase inteira, e não «Centrar» nem um ícone de 30×30: no
+      catálogo, um quadrado vazio foi lido como mapa partido.
+    {% endcomment %}
+    <div class="pin-map__canvas echilo-map" id="pin-map" tabindex="0" role="region"
+         aria-label="Mapa para definir a localização do imóvel">
+      <button class="pin-map__usar" type="button" id="pin-localizar"
+              aria-label="Usar a minha localização actual como posição do imóvel">
+        Usar a minha posição
+      </button>
+    </div>
+
+    <div class="pin-map__painel">
+      {% comment %}
+        O estado é escrito pelo servidor, e não pelo JavaScript. Sem este bloco,
+        quem abre a ficha sem JavaScript vê um mapa e nenhuma explicação, e quem
+        vê um mapa vazio não sabe se falta o pin ou falta o mapa.
+      {% endcomment %}
+      <p class="pin-map__estado" id="pin-estado" role="status">
+        {% if form.latitude.value %}
+          Pin actual: {{ form.latitude.value|coordinate }}, {{ form.longitude.value|coordinate }}.
+          {% if form.location_accuracy_m.value %}
+            Precisão de {{ form.location_accuracy_m.value }} m.
+          {% else %}
+            Sem precisão registada.
+          {% endif %}
+        {% else %}
+          Ainda não há pin. Carregue no mapa, ou use a sua posição actual.
+        {% endif %}
+      </p>
+
+      <p class="pin-map__divisao" id="pin-divisao" role="status">
+        {% if form.province_ref.value %}Divisão actual: {{ form.province_ref.value|province_label }}{% if form.municipality.value %}, município de {{ form.municipality.value }}{% endif %}.{% else %}A província e o município ficam por preencher. Se largar o pin, o mapa escreve os que conseguir determinar.{% endif %}
+      </p>
+
+      {% comment %}
+        A falha dos tiles e a recusa da permissão são caixas separadas, por uma
+        razão que já custou uma pista errada: um 403 do fornecedor a apagar a
+        recusa da geolocalização mandava a equipa seguir o diagnóstico errado.
+        A dos tiles é `alert`; a da geolocalização é `status`, porque dois
+        alertas ao mesmo tempo fazem o leitor de ecrã ler a mensagem errada.
+      {% endcomment %}
+      <p class="pin-map__erro" id="pin-erro" role="alert" hidden></p>
+      <p class="pin-map__aviso" id="pin-aviso" role="status"></p>
+
+      <p class="pin-map__nota">
+        Sem rato? Foque o mapa e desloque o pin com as setas. Com
+        <kbd>Shift</kbd>, o passo é maior.
+      </p>
+
+      {% comment %}
+        A atribuição não é um detalhe: a CC BY 4.0 exige que quem usa os dados
+        diga de onde são. Fica no painel, e não num README que ninguém vê,
+        porque quem chega ao mapa é quem consome a camada.
+      {% endcomment %}
+      <p class="pin-map__fonte">Fronteiras: geoBoundaries (CC BY 4.0), simplificadas para referência.</p>
+    </div>
+  </div>
+</section>

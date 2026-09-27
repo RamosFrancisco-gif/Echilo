@@ -317,6 +317,24 @@ def provinces_without_boundary() -> tuple[str, ...]:
     )
 
 
+def province_codes_by_boundary() -> dict[str, tuple[str, ...]]:
+    """Devolve, por nome de contorno, os códigos de província que ele cobre.
+
+    É o caminho inverso de `PROVINCE_BOUNDARY_CODES`, e existe porque quem pergunta
+    é o mapa, que conhece o nome que a fonte deu, e quem responde é o formulário,
+    cujas opções são os códigos da lista do projecto. Os dois lados precisam de
+    traduzir, e a tradução feita aqui é a mesma que valida o filtro.
+
+    O valor é uma lista e não um código porque `CUANDO` e `CUBANGO` são duas
+    entradas do projecto para um só contorno. Escolher uma delas sem saber qual é
+    a certa seria inventar a resposta, e o que o mapa sabe é o contorno.
+    """
+    por_nome: dict[str, list[str]] = {}
+    for codigo, nome in PROVINCE_BOUNDARY_CODES.items():
+        por_nome.setdefault(nome, []).append(codigo)
+    return {nome: tuple(sorted(codigos)) for nome, codigos in por_nome.items()}
+
+
 # Os municípios todos, sem repetir os que aparecem em duas listas. `Calai` e
 # `Menongue` estão em `CUANDO` e em `CUBANGO`, e o formulário de "Todas as
 # províncias" não pode oferecer o mesmo nome duas vezes.
