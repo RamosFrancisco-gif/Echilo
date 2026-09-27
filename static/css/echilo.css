@@ -141,6 +141,12 @@ h4,
   --wrap: 680px;
 }
 
+/* Formulários de administração: largos como o registo público, para que os
+   campos de identidade fiquem com a mesma medida dos que já se conhecem. */
+.wrap--narrow {
+  --wrap: 700px;
+}
+
 .wrap--intake {
   --wrap: 760px;
 }
@@ -284,6 +290,14 @@ h4,
   color: var(--mu);
 }
 
+/* Estado escolhido num filtro. O dourado é o acento do produto, e é a única
+   cor que distingue "estou aqui" de "posso ir para aqui" sem texto novo. */
+.badge--gold {
+  color: var(--gold);
+  border-color: rgba(245, 166, 35, 0.5);
+  background: rgba(245, 166, 35, 0.12);
+}
+
 .label {
   display: block;
   margin-bottom: 8px;
@@ -347,9 +361,93 @@ h4,
 }
 
 .nav__links a:hover,
-.nav__links a[aria-current="page"] {
+.nav__links a[aria-current="page"],
+.nav__links a.is-current {
   color: var(--tx);
   border-bottom-color: var(--gold);
+}
+
+/* Submenu do desktop. O ramo é um `details`, não um botão: o teclado, o
+   `aria-expanded` e o abrir/fechar são do browser, e sem JavaScript o ramo
+   continua a abrir. Um botão sem script seria um botão que não faz nada. */
+.nav__group {
+  position: relative;
+}
+
+.nav__group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  cursor: pointer;
+  list-style: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.nav__group-label::-webkit-details-marker {
+  display: none;
+}
+
+.nav__group-label::marker {
+  content: '';
+}
+
+.nav__group-label:hover,
+.nav__group[open] > .nav__group-label,
+.nav__group-label.is-current {
+  color: var(--tx);
+  border-bottom-color: var(--gold);
+}
+
+.nav__group-label:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.nav__group-caret {
+  width: 10px;
+  height: 7px;
+  transition: transform 0.2s;
+}
+
+.nav__group[open] .nav__group-caret {
+  transform: rotate(180deg);
+}
+
+.nav__submenu {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: -14px;
+  min-width: 208px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+  background: var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.nav__submenu a {
+  padding: 9px 12px;
+  border-radius: 8px;
+  border-bottom: 0;
+  color: var(--mu);
+  white-space: nowrap;
+}
+
+.nav__submenu a:hover,
+.nav__submenu a:focus-visible {
+  background: var(--s3);
+  color: var(--tx);
+}
+
+.nav__submenu a[aria-current="page"] {
+  color: var(--gold);
+  background: rgba(245, 166, 35, 0.1);
 }
 
 .nav__actions {
@@ -483,6 +581,33 @@ h4,
   border-bottom: 1px solid var(--line2);
 }
 
+/* No telemóvel o ramo não desce: mostra o nome e as filhas em linha. O `details`
+   do desktop não é usado aqui, porque um submenu sobreposto a 208 px de largura
+   dentro de um menu de largura do ecrã é um menu com ar de modal. */
+.nav__menu-group {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line2);
+}
+
+.nav__menu-group-label {
+  display: block;
+  padding: 14px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mu2);
+}
+
+.nav__menu-group a:not(.btn) {
+  padding-left: 12px;
+  border-bottom: 0;
+}
+
+.nav__menu-group a:not(.btn)[aria-current="page"] {
+  color: var(--gold);
+}
+
 .nav__menu .btn {
   width: 100%;
   margin-top: 14px;
@@ -509,6 +634,238 @@ h4,
   color: #1a1005;
   font-size: 11px;
   font-weight: 800;
+}
+
+/* A mesma classe serve a imagem e às iniciais, e sem isto a fotografia sai
+   quadrada dentro de um círculo dourado que é a parte de trás. `object-fit`
+   corta em vez de esticar, que é o que se espera de um retrato num disco de 28
+   px — esticar um rosto é pior que o não mostrar. */
+img.user-chip__avatar {
+  object-fit: cover;
+  background: none;
+  color: inherit;
+}
+
+/* Página do perfil: resumo à esquerda, formulários à direita.
+
+   A coluna da esquerda é um resumo e fica colada ao topo enquanto se desce a
+   página. A pessoa chega aqui para confirmar " sou eu, é esta conta", e essa
+   resposta não precisa de estar a disappearancear no meio do formulário. Abaixo
+   de 940 px passa a uma coluna e a nota de sticky desaparece: numa coluna, um
+   cartão que fica colado ao topo rouba a altura do primeiro campo. */
+.settings {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.settings__aside {
+  position: sticky;
+  top: calc(var(--nav-h) + 18px);
+  display: grid;
+  gap: 12px;
+}
+
+.settings__main {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.settings__aside-note {
+  padding: 12px 15px;
+  border: 1px dashed var(--line2);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--mu2);
+}
+
+.settings-form {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-card {
+  padding: 22px 24px 24px;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-lg);
+  background: var(--s1);
+}
+
+.settings-card--senha {
+  border-color: var(--line);
+  background: var(--s2);
+}
+
+/* A palavra-passe recusada é a única secção que recebe destaque, e só no POST
+   que a submeteu. Sem isto, um erro de senha aparece no fim de uma página longa
+   e a pessoa vai à procura do campo errado. */
+.settings-card.is-recusado {
+  border-color: var(--no);
+}
+
+.settings-card__head {
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line2);
+}
+
+.settings-card__title {
+  margin: 0 0 6px;
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--tx);
+}
+
+.settings-card__hint {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--mu);
+}
+
+/* Campos aos pares, e a meio da largura em ecrãs estreitos. Um `label` e o seu
+   `input` são uma unidade de leitura; separá-los por uma linha inteira obriga a
+   varrer a página a cada campo. */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+}
+
+.settings-grid > .field:only-child,
+.settings-grid > .field__help {
+  grid-column: 1 / -1;
+}
+
+.settings-photo {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.settings-photo__preview {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #1a1005;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+img.settings-photo__preview {
+  object-fit: cover;
+  background: none;
+  color: inherit;
+}
+
+.settings-photo__fields {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.profile-card {
+  padding: 22px 20px;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-lg);
+  background: var(--s1);
+  text-align: center;
+}
+
+.profile-card__avatar {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #1a1005;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+img.profile-card__avatar {
+  object-fit: cover;
+  background: none;
+  color: inherit;
+}
+
+.profile-card__name {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.profile-card__role {
+  margin: 5px 0 16px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--gold);
+}
+
+.profile-card__facts {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line2);
+  text-align: left;
+}
+
+.profile-card__facts > div {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.profile-card__facts dt {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--mu2);
+}
+
+.profile-card__facts dd {
+  margin: 0;
+  color: var(--tx);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 940px) {
+  .settings {
+    grid-template-columns: 1fr;
+  }
+
+  .settings__aside {
+    position: static;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Secções */
@@ -605,6 +962,40 @@ main {
   color: var(--accent);
   font-size: 11px;
   font-weight: 700;
+}
+
+/* Rotação das fotografias do cartão. Todas as imagens ocupam o mesmo sítio e
+   a activa é a única visível, por isso a troca é uma sobreposição em vez de um
+   salto. `z-index: 1` e não `0`: a etiqueta de finalidade vive a `2` e ficava
+   por baixo da fotografia. O contentor não tem de ter altura própria — a caixa
+   de mídia já traz `aspect-ratio`. */
+.card-property__fotos {
+  position: absolute;
+  inset: 0;
+}
+
+.card-property__foto {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.9s ease;
+}
+
+.card-property__foto.is-ativa {
+  opacity: 1;
+}
+
+/* Quem pede menos movimento fica com a troca, sem a dissolução. A regra está
+   aqui e não no JavaScript porque é uma questão de como a imagem se apresenta,
+   e o browser sabe disso melhor do que um script. */
+@media (prefers-reduced-motion: reduce) {
+  .card-property__foto {
+    transition: none;
+  }
 }
 
 .card-property__body {
@@ -752,6 +1143,22 @@ select.field-control {
 
 .field-control[aria-invalid="true"] {
   border-color: var(--no);
+}
+
+/* Uma divisão que veio da posição do aparelho é uma medição, não uma escolha, e
+   por isso não se edita. O browser trata `disabled` e `readonly` de maneira
+   diferente — o `select` esbate-se sozinho, o campo de texto não — e esta classe
+   é o que faz os dois parecerem a mesma coisa. O contorno muda de cor para
+   dizer que o valor é fixo, porque o esbatido sozinho também é o que um campo
+   indisponível durante um carregamento parece. */
+.field-control.is-fixed {
+  opacity: 0.75;
+  border-style: dashed;
+  cursor: default;
+}
+
+.field-control.is-fixed[readonly] {
+  cursor: default;
 }
 
 .field__help {
@@ -1057,6 +1464,7 @@ select.field-control {
 .mb-12 { margin-bottom: 12px; }
 .mb-14 { margin-bottom: 14px; }
 .mb-16 { margin-bottom: 16px; }
+.mb-18 { margin-bottom: 18px; }
 .mb-20 { margin-bottom: 20px; }
 .mb-22 { margin-bottom: 22px; }
 .mb-24 { margin-bottom: 24px; }
@@ -1130,6 +1538,105 @@ select.field-control {
   border-color: var(--line);
 }
 
+/* Listas de contas e de imóveis em curadoria. Não são cartões: uma linha por
+   registo, com o estado à direita, para se ler a lista de cima a baixo sem
+   comparar molduras. */
+.table-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.table-list__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  background: var(--s1);
+  border: 1px solid var(--line2);
+  border-radius: var(--r-md);
+}
+
+.table-list__row:hover {
+  border-color: var(--line);
+}
+
+.table-list__title {
+  display: block;
+  margin: 2px 0 4px;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.25;
+  color: var(--tx);
+}
+
+a.table-list__title:hover {
+  color: var(--gold);
+}
+
+.table-list__meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 620px) {
+  .table-list__row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}
+
+/* Barra de pesquisa acima da lista. O campo cresce e o botão fica à direita,
+   para que o `Enter` no campo seja o caminho natural. */
+.search-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search-row .field {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.search-row .field__help {
+  margin-bottom: 0;
+}
+
+/* O que cada perfil passa a poder fazer, escrito ao lado do campo que o
+   escolhe. Uma lista de opções com uma frase por opção é mais do que a
+   interface precisa, e o campo continua a ser a fonte da verdade. */
+.role-help {
+  margin-top: 4px;
+  padding: 14px 16px;
+  background: rgba(245, 166, 35, 0.06);
+  border: 1px solid rgba(245, 166, 35, 0.18);
+  border-radius: var(--r-sm);
+}
+
+.role-help p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--mu);
+}
+
+.role-help p:last-child {
+  margin-bottom: 0;
+}
+
+.role-help b {
+  color: var(--tx);
+}
+
 .fieldset--spaced { margin-bottom: 22px; }
 .field__help--center { text-align: center; }
 
@@ -1182,6 +1689,103 @@ select.field-control {
 @media (max-width: 900px) {
   .detail--aside {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Confirmação ----------------------------------------------------------------
+   Uma caixa só, do sistema, incluída no `base.html`. O `::backdrop` é o browser
+   a escurecer o que está atrás, e é ele que dá a ideia de que a página parou. */
+.modal {
+  width: min(440px, calc(100% - 32px));
+  max-width: none;
+  padding: 0;
+  border: 1px solid var(--line2);
+  border-radius: var(--r-lg);
+  background: var(--s2);
+  color: var(--tx);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.modal::backdrop {
+  background: rgba(6, 4, 2, 0.72);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.modal__painel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 26px 24px 22px;
+}
+
+.modal__titulo {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--tx);
+}
+
+.modal__corpo {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+}
+
+/* O ícone é um aviso, não um erro: o erro foi de quem clicou sem querer, e o
+   texto a seguir diz o que se perde. */
+.modal__icone {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--no);
+}
+
+.modal__texto {
+  margin: 0;
+  color: var(--mu);
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.modal__accoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 480px) {
+  /* A mesma ordem de cima para baixo que no ecrã largo: cancelar primeiro,
+     confirmar em baixo. Inverter a coluna punha o botão que apaga por cima do
+     botão que desiste, e a leitura de cima para baixo passava a ser o inverso
+     do desktop. */
+  .modal__accoes {
+    flex-direction: column;
+  }
+
+  .modal__accoes .btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .modal[open] {
+    animation: modal-in 0.18s ease-out both;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

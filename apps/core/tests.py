@@ -16,13 +16,17 @@ from django.conf import settings
 from django.contrib.staticfiles import finders
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.template import Context, Template
+from django.template.loader import render_to_string
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.concierge.models import Conversation, Lead, Offer, VisitRequest
+from apps.core import navigation
 from apps.core.forms import BaseStyledForm
 from apps.core.geo import (
     EARTH_RADIUS_M,
@@ -98,6 +102,117 @@ class RouteSmokeTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "T3 no Kilamba com quintal")
+
+    def _fotos_do_carrocel(self, html: str) -> list[str]:
+        """As tags das imagens que rodam, e nada mais.
+
+        Contar `card-property__foto` na pagina inteira nao funciona: o contentor
+        da pilha e `card-property__fotos` e comeca pela mesma palavra, e contar
+        `src=` na pagina apanha o logotipo e o heroi. Ficar pelas tags resolve
+        as duas coisas.
+        """
+        return re.findall(r'<img[^>]*class="card-property__foto[^"]*"[^>]*>', html)
+
+    def test_a_home_rota_as_fotografias_dos_imoveis_publicados(self) -> None:
+        """Os imoveis publicados na home mostram todas as fotografias, nao so a capa."""
+        response = self.anonymous.get(reverse("properties:home"))
+
+        html = response.content.decode()
+        # Cinco fotografias por imovel, em dois imoveis.
+        self.assertEqual(len(self._fotos_do_carrocel(html)), 10)
+        self.assertEqual(html.count('class="card-property__fotos"'), 2)
+        self.assertIn("data-intervalo=", html)
+
+    def test_a_home_nao_pede_todas_as_fotografias_de_cima(self) -> None:
+        """Só a capa é pedida ao servidor; as restantes esperam pela vez delas.
+
+        Seis cartões com quinze fotografias cada são noventa imagens. Com `src`
+        nas noventa, a página pede noventa ficheiros de uma vez, e o primeiro
+        ecrã aparece quando a última fotografia chega. `data-src` adia o pedido
+        até a imagem estar a ser mostrada.
+
+        O `src` não pode ser contado com `\\bsrc=`: o hífen não é caractere de
+        palavra, e `\\bsrc=` casa dentro de `data-src=`.
+        """
+        response = self.anonymous.get(reverse("properties:home"))
+
+        fotos = self._fotos_do_carrocel(response.content.decode())
+        pedidos = [foto for foto in fotos if re.search(r'(?<![\w-])src="', foto)]
+        adiadas = [foto for foto in fotos if 'data-src="' in foto]
+        # Dois imóveis, dois pedidos imediatos: uma capa por imóvel.
+        self.assertEqual(len(pedidos), 2)
+        self.assertEqual(len(adiadas), 8)
+
+    def test_a_fotografia_que_esta_a_vez_e_a_unica_que_o_leitor_de_ecra_o_le(self) -> None:
+        """As fotografias que não estão à vista ficam fora da leitura.
+
+        Quinze fotografias com o mesmo texto alternativo são quinze repetições
+        do título do imóvel para quem navega por leitor de ecrã. Só a activa é
+        exposta, e o JavaScript vai trocando isso com a imagem.
+        """
+        response = self.anonymous.get(reverse("properties:home"))
+
+        fotos = self._fotos_do_carrocel(response.content.decode())
+        expostas = [foto for foto in fotos if 'aria-hidden="true"' not in foto]
+        escondidas = [foto for foto in fotos if 'aria-hidden="true"' in foto]
+        # Duas expostas: uma capa por imóvel, que é o que a pessoa lê.
+        self.assertEqual(len(expostas), 2)
+        self.assertEqual(len(escondidas), 8)
+        for foto in expostas:
+            self.assertIn("card-property__foto is-ativa", foto)
+
+    def test_o_botao_de_paragem_das_fotos_so_existe_se_houver_javascript(self) -> None:
+        """O botão vem escondido no HTML e é o JavaScript que o mostra.
+
+        Um botão de pausa que não faz nada sem JavaScript lê-se como uma falha
+        da página, e é pior do que não ter botão nenhum.
+        """
+        response = self.anonymous.get(reverse("properties:home"))
+
+        html = response.content.decode()
+        self.assertRegex(html, r'<button[^>]*id="pausa-fotos"[^>]*hidden')
+
+    def test_o_catalogo_nao_roda_as_fotografias(self) -> None:
+        """A rotação é da página inicial, e o catálogo lista imóveis para comparar.
+
+        No catálogo a pessoa está a escolher entre doze, e uma fotografia que
+        muda a cada quarenta segundos por baixo do texto que está a ler é o
+        oposto de ajudar.
+        """
+        response = self.anonymous.get(reverse("properties:property_list"))
+
+        self.assertNotContains(response, "data-fotos")
+
+    def test_a_home_traz_as_fotografias_de_todos_os_imoveis_numa_consulta(self) -> None:
+        """A página inteira lê as imagens de todos os imóveis com uma consulta.
+
+        Com o `prefetch_related` a contar as fotografias, a home fazia uma
+        consulta por imóvel. O sintoma não é a lentidão com seis imóveis: é que
+        o número cresce com o catálogo, e a página fica mais lenta sem que
+        nenhum teste diga que algo mudou.
+        """
+        for prop in (self.rent, self.sale):
+            for extra in range(10):
+                make_image(prop, caption=f"Extra {extra}")
+
+        with CaptureQueriesContext(connection) as contexto:
+            response = self.anonymous.get(reverse("properties:home"))
+
+        self.assertEqual(response.status_code, 200)
+        # Filtrar por "propertyimage" em geral não chega: a query dos imóveis
+        # traz `COUNT(properties_propertyimage.id)` do `featured` e contava
+        # como se fosse uma segunda leitura das imagens.
+        consultas_de_imagens = [
+            consulta
+            for consulta in contexto.captured_queries
+            if "FROM `properties_propertyimage`" in consulta["sql"]
+        ]
+        self.assertEqual(
+            len(consultas_de_imagens),
+            1,
+            "esperava uma consulta às fotografias, houve "
+            f"{len(consultas_de_imagens)}",
+        )
 
     def test_a_home_oferece_as_vinte_e_uma_provincias(self) -> None:
         """A home e o catálogo são a mesma pesquisa, e oferecem o mesmo.
@@ -274,6 +389,180 @@ class RouteSmokeTests(TestCase):
         for asset in ("css/echilo.css", "css/pages.css"):
             with self.subTest(asset=asset):
                 self.assertTrue(finders.find(asset), f"{asset} não foi encontrado")
+
+
+class NavigationByProfileTests(TestCase):
+    """O menu é uma resposta ao perfil, e a página tem de concordar com ele (§3).
+
+    A navegação e a guarda das vistas são coisas diferentes: o menu diz o que
+    existe, a vista decide o que abre. Um teste que só olhasse para o menu
+    passaria com um menu correcto em cima de vistas abertas a toda a gente, que
+    é exactamente o defeito que a equipa descreveu.
+    """
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cache.clear()
+        cls.admin = make_user(role=User.Role.ADMIN, email="admin@echilo.ao")
+        cls.agent = make_user(role=User.Role.AGENT, email="agente@echilo.ao")
+        cls.curator = make_user(role=User.Role.CURATOR, email="curador@echilo.ao")
+        cls.cliente = make_user(email="cliente@echilo.ao")
+        cls.owner = make_owner(created_by=cls.curator)
+        cls.prop = make_property(curator=cls.curator, owner=cls.owner)
+
+    def _menu(self, user: object) -> list[dict]:
+        """Devolve o menu do utilizador já desenhado para o template."""
+        return navigation.para_template(user, nome_atual="home")
+
+    def test_o_visitante_so_ve_a_navegacao_publica(self) -> None:
+        """Sem conta não há Curadoria nem contas, e a lista pública está inteira."""
+        rotulos = [entrada["label"] for entrada in self._menu(None)]
+
+        self.assertIn("Arrendar", rotulos)
+        self.assertNotIn("Curadoria", rotulos)
+        self.assertNotIn("Equipa e clientes", rotulos)
+
+    def test_o_cliente_registado_nao_ve_nada_de_interior(self) -> None:
+        """Ter conta não é ter acesso: um `CLIENT` vê o mesmo menu do visitante."""
+        rotulos = [entrada["label"] for entrada in self._menu(self.cliente)]
+
+        self.assertNotIn("Curadoria", rotulos)
+        self.assertNotIn("Equipa e clientes", rotulos)
+
+    def test_o_curador_ve_a_curadoria_com_imoveis_e_formulario(self) -> None:
+        """O ramo de curadoria tem as duas entradas que o perfil permite."""
+        ramos = {e["label"]: e for e in self._menu(self.curator) if e.get("is_group")}
+
+        self.assertIn("Curadoria", ramos)
+        self.assertEqual(
+            [folha["label"] for folha in ramos["Curadoria"]["links"]],
+            ["Imóveis", "Novo imóvel"],
+        )
+
+    def test_o_agente_ve_a_curadoria_mas_nao_as_contas(self) -> None:
+        """Validar documentos não dá o direito de criar contas."""
+        ramos = {e["label"] for e in self._menu(self.agent) if e.get("is_group")}
+
+        self.assertIn("Curadoria", ramos)
+        self.assertNotIn("Equipa e clientes", ramos)
+
+    def test_o_administrador_ve_a_curadoria_e_as_contas(self) -> None:
+        """`ADMIN` é o único perfil com os dois ramos."""
+        ramos = {e["label"] for e in self._menu(self.admin) if e.get("is_group")}
+
+        self.assertEqual(ramos, {"Curadoria", "Equipa e clientes"})
+
+    def test_a_folha_marcada_diz_onde_esta_a_pessoa(self) -> None:
+        """Só uma entrada por página pode dizer "está aqui"."""
+        menu = navigation.para_template(self.admin, nome_atual="client_list")
+        actuais = [
+            folha["label"]
+            for entrada in menu
+            for folha in (entrada["links"] if entrada.get("is_group") else [entrada])
+            if folha["is_current"]
+        ]
+
+        self.assertEqual(actuais, ["Clientes"])
+
+    def test_o_ramo_da_curadoria_acende_na_página_da_curadoria(self) -> None:
+        """Estar dentro da curadoria acende o ramo, e não só a folha."""
+        menu = navigation.para_template(self.curator, nome_atual="curator_detail")
+        ramo = next(e for e in menu if e.get("is_group") and e["label"] == "Curadoria")
+
+        self.assertTrue(ramo["is_current"])
+
+    def test_o_menu_desenha_o_submenu_como_ramo_abrir_e_fechar(self) -> None:
+        """O ramo é um `details`, para o teclado e o `aria-expanded` serem do browser.
+
+        Um botão com JavaScript que não chegou a ser escrito é um ramo que não
+        abre, e ninguém descobre se o erro é o menu ou a página.
+        """
+        self.client.force_login(self.curator)
+
+        html = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertIn('class="nav__group"', html)
+        self.assertIn("<summary", html)
+        self.assertIn("Curadoria", html)
+        self.assertIn(reverse("properties:curator_dashboard"), html)
+
+    def test_o_cliente_nao_ve_o_ramo_da_curadoria_no_html(self) -> None:
+        """A ausência também se mede: o ramo não pode estar só escondido por CSS."""
+        self.client.force_login(self.cliente)
+
+        html = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertNotIn(reverse("properties:curator_dashboard"), html)
+        self.assertNotIn("Equipa e clientes", html)
+
+    def test_a_curadoria_abre_para_a_equipa_e_e_403_para_o_cliente(self) -> None:
+        """O menu e a vista dizem a mesma coisa: a página também recusa."""
+        url = reverse("properties:curator_dashboard")
+
+        for membro in (self.curator, self.agent, self.admin):
+            with self.subTest(perfil=membro.role):
+                self.client.force_login(membro)
+                self.assertEqual(self.client.get(url).status_code, 200)
+
+        self.client.force_login(self.cliente)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_o_dashboard_da_curadoria_filtra_por_estado(self) -> None:
+        """O filtro escreve o estado no URL e a lista obedece."""
+        rascunho = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            status=Property.Status.DRAFT,
+            title="Moradia por publicar em Benfica",
+        )
+        self.client.force_login(self.curator)
+        url = reverse("properties:curator_dashboard")
+
+        sem_filtro = self.client.get(url)
+        rascunhos = self.client.get(url + "?estado=DRAFT")
+
+        self.assertContains(sem_filtro, rascunho.title)
+        self.assertContains(rascunhos, rascunho.title)
+        self.assertNotContains(rascunhos, self.prop.title)
+
+    def test_o_dashboard_descarta_o_estado_desconhecido_e_marca_o_todos(self) -> None:
+        """Um estado escrito à mão não parte a rota nem fica sem filtro marcado.
+
+        O estado é descartado por inteiro, como a área na pesquisa (§2.12): a
+        lista volta a ser a lista, e "Todos" é o que fica marcado. Um recorte a
+        meio filtrar é pior do que nenhum recorte.
+        """
+        self.client.force_login(self.curator)
+
+        response = self.client.get(reverse("properties:curator_dashboard") + "?estado=TZAR")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.prop.title)
+        self.assertContains(response, '<a class="badge badge--gold"')
+
+    def test_o_dashboard_ignora_o_estado_em_minusculas(self) -> None:
+        """O estado não é um campo livre: o que a página escreve é o que a base devolve."""
+        self.client.force_login(self.curator)
+        url = reverse("properties:curator_dashboard")
+
+        response = self.client.get(url + "?estado=draft")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, self.prop.title)
+
+    def test_a_conta_do_administrador_entra_sem_ser_superuser(self) -> None:
+        """As páginas internas seguem o perfil, não as permissões do Django admin.
+
+        O `admin@echilo.ao` local é `is_staff` e não é superuser. Se a gestão de
+        contas dependesse de `is_superuser`, o administrador do produto ficaria
+        de fora da única parte do produto que é só dele.
+        """
+        self.assertFalse(self.admin.is_superuser)
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("accounts:team_list"))
+
+        self.assertEqual(response.status_code, 200)
 
 
 class ConciergeDataIntegrityTests(TestCase):
@@ -620,7 +909,7 @@ class TemplateMarkupTests(SimpleTestCase):
             encoding="utf-8"
         )
         self.assertIn("@media (prefers-reduced-motion: no-preference)", css)
-        for keyframe in ("reveal-up", "message-in", "menu-item-in"):
+        for keyframe in ("reveal-up", "message-in", "menu-item-in", "modal-in"):
             self.assertIn(f"@keyframes {keyframe}", css, f"falta a animação {keyframe}")
 
     def test_reveal_falls_back_when_scroll_timelines_are_missing(self) -> None:
@@ -722,6 +1011,258 @@ class TemplateMarkupTests(SimpleTestCase):
         self.assertEqual(repeat(999), [None] * 12, "o limite de 12 não é negociável")
         self.assertEqual(repeat(-3), [])
         self.assertEqual(repeat("nope"), [])
+
+
+class ConfirmacaoModalTests(TestCase):
+    """A confirmação de acções destrutivas é um componente do sistema.
+
+    O `window.confirm` que estava no `echilo.js` era o único diálogo nativo que
+    restava. Um diálogo do browser não se deixa estilizar, é desenhado pelo
+    browser e não pela folha de estilos, e aparece como um quadrado cinzento no
+    meio de uma interface feita à mão. Numa página onde se apaga uma fotografia
+    sem forma de a recuperar, um botão de "OK" genérico por cima de um aviso
+    genérico é a forma mais rápida de apagar a coisa errada.
+    """
+
+    # `alert(`, `confirm(` e `prompt(` do browser. O `\b` inicial é o que
+    # impede que apanhe o nosso `data-confirmar`, que é um atributo e não uma
+    # chamada.
+    DIALOGO_NATIVO = re.compile(r"\b(?:window\.)?(?:alert|confirm|prompt)\s*\(")
+    COMMENTO_JS = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+    def _js_do_projecto(self) -> list[Path]:
+        pasta = Path(settings.BASE_DIR) / "static" / "js"
+        return [p for p in sorted(pasta.glob("*.js")) if "vendor" not in p.parts]
+
+    def _sem_comentarios(self, texto: str) -> str:
+        """O código sem os comentários.
+
+        O ficheiro explica *porquê* o `alert` dos tiles foi trocado por uma caixa
+        e menciona as palavras `alert` e `confirm` em prosa. Se a procura não
+        tirar os comentários primeiro, o teste acusa o próprio teste de estar
+        errado — e o próximo que o ler deixa de lhe dar crédito.
+        """
+        return self.COMMENTO_JS.sub(lambda m: "\n" * m.group(0).count("\n"), texto)
+
+    def test_nao_ha_dialogos_nativos_no_javascript(self) -> None:
+        """Nenhum `alert`, `confirm` ou `prompt` sobrevive no nosso código.
+
+        Todos os ficheiros de `static/js/` são lidos, e não só o `echilo.js`:
+        um `confirm` num ficheiro novo passava a resposta e voltava a apagar
+        imóveis sem o modal aparecer. A comparação é feita linha a linha para a
+        falha dizer o ficheiro e a linha em vez de despejar o JavaScript.
+        """
+        achados: list[str] = []
+        for caminho in self._js_do_projecto():
+            for numero, linha in enumerate(
+                self._sem_comentarios(caminho.read_text(encoding="utf-8")).splitlines(), 1
+            ):
+                if self.DIALOGO_NATIVO.search(linha):
+                    achados.append(f"{caminho.name}:{numero}: {linha.strip()}")
+
+        self.assertEqual(achados, [], f"diálogos nativos: {achados}")
+
+    def test_a_caixa_existe_em_todas_as_paginas(self) -> None:
+        """A caixa vem do `base.html`, e não de cada página que a usa.
+
+        Uma cópia por página daria duas respostas à mesma pergunta, e a segunda
+        é sempre a que ninguém actualiza. Duas páginas diferentes são renderizadas
+        para provar que o include chega às duas.
+        """
+        base = (Path(settings.BASE_DIR) / "templates" / "base.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('{% include "partials/confirmacao.html" %}', base)
+
+        for url in ("/", "/imoveis/"):
+            with self.subTest(url=url):
+                html = self.client.get(url).content.decode("utf-8")
+                self.assertIn('id="confirmacao"', html)
+                self.assertIn("data-modal-confirmar", html)
+
+    def test_o_cancelar_vem_antes_do_confirmar(self) -> None:
+        """O `showModal()` foca o primeiro elemento da caixa.
+
+        Quem abre a confirmação com o teclado e prime logo `Enter` não pode ter o
+        botão que apaga a fotografia debaixo do dedo. É a ordem no HTML que
+        decide qual é o primeiro, e não o CSS: um `order` resolveria o desenho e
+        não o foco.
+        """
+        parcial = render_to_string("partials/confirmacao.html")
+
+        self.assertLess(
+            parcial.index("data-modal-cancelar"),
+            parcial.index("data-modal-confirmar"),
+            "o botão de cancelar tem de ser o primeiro focável da caixa",
+        )
+
+    def test_a_caixa_usa_o_formulario_dialog_e_nao_o_atributo_open(self) -> None:
+        """`method="dialog"` é o que dá `Esc`, `Enter` e o `returnValue`.
+
+        O `Esc` e o valor devolvido à mão são o caminho que dá dois `addEventListener`
+        para cada tecla e um `keydown` global a disputar o foco com o resto da
+        página. O atributo `open` é o oposto do que se quer: abre uma caixa que
+        não é modal, sem `::backdrop` e sem o resto da página inerte.
+        """
+        parcial = render_to_string("partials/confirmacao.html")
+
+        self.assertIn('method="dialog"', parcial)
+        self.assertNotIn(" open", parcial)
+        self.assertIn('value="confirmar"', parcial)
+        self.assertIn('value="cancelar"', parcial)
+
+    def test_o_javascript_usa_showmodal(self) -> None:
+        """`showModal()` e não `dialog.open = true`, pelo mesmo motivo."""
+        js = (Path(settings.BASE_DIR) / "static" / "js" / "echilo.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("showModal()", js)
+        self.assertNotIn(".open = true", js)
+        # `showModal()` numa caixa já aberta lança `InvalidStateError`, e o clique
+        # que confirmou a acção destrutiva é um clique como os outros.
+        self.assertIn("dialogo.open", js)
+
+    def test_as_accoes_destrutivas_titulo_e_rotulo_proprios(self) -> None:
+        """Cada acção destrutiva escreve o seu título e o seu botão.
+
+        Sem os dois atributos a caixa mostra "Confirmar acção" e "Confirmar" por
+        cima de um aviso que apaga uma ficha. Um botão que não diz o que faz
+        convida ao erro, e o `data-confirmar` sozinho não chega.
+        """
+        sem_titulo: list[str] = []
+        templates = Path(settings.BASE_DIR) / "templates"
+        for caminho in sorted(templates.rglob("*.html")):
+            texto = caminho.read_text(encoding="utf-8")
+            if 'data-confirmar="' not in texto:
+                continue
+            for bloco in re.findall(r"<button[^>]*data-confirmar=[^>]*>", texto, re.DOTALL):
+                if "data-confirmar-titulo=" not in bloco or "data-confirmar-ok=" not in bloco:
+                    sem_titulo.append(f"{caminho.name}: {bloco[:60]}...")
+
+        self.assertEqual(sem_titulo, [], f"acções sem título ou rótulo: {sem_titulo}")
+
+    def test_as_accoes_destrutivas_declaradas_em_python_tambem_sao_confirmadas(self) -> None:
+        """Um widget destrutivo também escreve título e rótulo.
+
+        A acção destrutiva nem sempre é um `<button>` num template: a caixa de
+        selecção que remove a fotografia do perfil é um widget declarado no
+        formulário, e o `{{ field }}` do partial não tem como saber que aquele
+        campo apaga alguma coisa. Varrer só os templates deixava este caso de
+        fora da regra sem dar erro — a caixa perguntava "Confirmar acção" sobre
+        um ficheiro que ia embora.
+        """
+        sem_titulo: list[str] = []
+        for app in sorted((Path(settings.BASE_DIR) / "apps").glob("*/forms.py")):
+            texto = app.read_text(encoding="utf-8")
+            if "data-confirmar" not in texto:
+                continue
+            for bloco in re.findall(r'"data-confirmar":.*?\}\)', texto, re.DOTALL):
+                if "data-confirmar-titulo" not in bloco or "data-confirmar-ok" not in bloco:
+                    sem_titulo.append(f"{app.parent.name}: {bloco[:60]}...")
+
+        self.assertEqual(sem_titulo, [], f"widgets sem título ou rótulo: {sem_titulo}")
+
+    def test_a_caixa_de_selecao_destrutiva_tambem_pede_confirmacao(self) -> None:
+        """Marcar a caixa que remove a fotografia abre a confirmação.
+
+        A caixa de selecção é a acção destrutiva que não é um clique de
+        perigo: quem a marca está a dizer o que quer, e mesmo assim o ficheiro
+        vai com a conta. A confirmação desliga-se disto, não da ausência de
+        `data-confirmar` no botão.
+        """
+        from apps.accounts.forms import ProfileForm
+
+        widget = ProfileForm().fields["remover_foto"].widget
+        attrs = widget.attrs
+
+        self.assertIn("data-confirmar", attrs)
+        self.assertIn("data-confirmar-titulo", attrs)
+        self.assertIn("data-confirmar-ok", attrs)
+
+    def test_a_confirmacao_da_caixa_de_selecao_desmarca_quando_se_cancela(self) -> None:
+        """Cancelar tem de desfazer a marca, e não deixá-la como estava.
+
+        A caixa já fica marcada quando a pessoa a selecciona, e é por isso que o
+        caminho da selecção não repete o clique: escreve a marca. Sem o
+        `checked = confirmado` do `close`, "Cancelar" confirmava em silêncio a
+        remoção que dizia estar a cancelar.
+        """
+        js = (Path(settings.BASE_DIR) / "static" / "js" / "echilo.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("eCaixa(alvo)", js)
+        self.assertIn("alvo.checked = confirmado", js)
+        # O caminho do clique não pode tratar a caixa de selecção: o browser já
+        # a marcou, e repetir o clique com um `preventDefault` em cima dava um
+        # estado que ninguém pediu.
+        self.assertIn("if (eCaixa(botao)) return;", js)
+
+    def _sem_blocos_de(self, texto: str, condicao: str) -> str:
+        """Devolve o CSS sem os blocos `@media` cuja condição é a indicada.
+
+        Contar chavetas é o que faz isto certo: com um regex, um bloco que
+       termina onde acaba o primeiro `{` interior corta a folha ao meio e o
+        teste passa a medir outra coisa.
+        """
+        fora: list[str] = []
+        i = 0
+        while True:
+            abre = texto.find("{", i)
+            if abre == -1:
+                fora.append(texto[i:])
+                break
+            cabecalho = texto[i:abre]
+            nivel, j = 1, abre + 1
+            while j < len(texto) and nivel:
+                nivel += (texto[j] == "{") - (texto[j] == "}")
+                j += 1
+            if condicao in cabecalho:
+                fora.append("\n" * cabecalho.count("\n"))
+            else:
+                fora.append(texto[i:j])
+            i = j
+        return "".join(fora)
+
+    def test_a_caixa_move_se_so_com_movimento_pedido(self) -> None:
+        """A entrada da caixa respeita a preferência de movimento reduzido.
+
+        O teste mede o inverso do óbvio: tira os blocos `no-preference` e exige
+        que a animação já não esteja lá. Contar quantos blocos existem não
+        diria nada — a folha tem mais do que um, e o número é uma coincidência
+        da redacção, não uma regra.
+        """
+        css = (Path(settings.BASE_DIR) / "static" / "css" / "echilo.css").read_text(
+            encoding="utf-8"
+        )
+        sem_movimento = self._sem_blocos_de(css, "prefers-reduced-motion: no-preference")
+
+        self.assertIn(".modal[open]", css)
+        self.assertNotIn(
+            ".modal[open]",
+            sem_movimento,
+            "a caixa anima-se fora do bloco de movimento pedido",
+        )
+        self.assertIn("@keyframes modal-in", css)
+
+    def test_a_caixa_diz_o_que_esta_em_risco(self) -> None:
+        """A caixa tem de estar rotulada pelo texto e pelo título que descreve.
+
+        Um `<dialog>` sem `aria-labelledby` é uma caixa sem nome, e o leitor de
+        ecrã anuncia "diálogo" sem dizer sobre o quê. O texto é o que o
+        JavaScript escreve, e é por isso que a descrição aponta para o mesmo
+        `id`.
+        """
+        parcial = render_to_string("partials/confirmacao.html")
+
+        self.assertIn('aria-labelledby="confirmacao-titulo"', parcial)
+        self.assertIn('aria-describedby="confirmacao-texto"', parcial)
+        self.assertIn('id="confirmacao-titulo"', parcial)
+        self.assertIn('id="confirmacao-texto"', parcial)
+        # O texto nasce vazio: quem escreve nele é o `data-confirmar` do botão.
+        # Mark-up com um aviso de exemplo seria um aviso falso em três páginas.
+        self.assertIn('id="confirmacao-texto" class="modal__texto"></p>', parcial)
 
 
 class AngolanIdentityValidatorTests(SimpleTestCase):

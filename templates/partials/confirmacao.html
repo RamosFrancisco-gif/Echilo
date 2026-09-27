@@ -1,0 +1,29 @@
+{% comment %}
+  Confirmação de acções destrutivas, do sistema e em toda a aplicação.
+
+  Substitui o `window.confirm` do browser, que não se deixa estilizar, é
+  desenhado pelo browser e não pela folha de estilos, e por isso aparece como um
+  quadrado cinzento no meio de uma interface desenhada. A caixa vive uma vez no
+  `base.html`: uma segunda versão por página daria duas respostas à mesma
+  pergunta, e a segunda é sempre a que ninguém actualiza.
+
+  O `<form method="dialog">` é o que dá `Esc`, `Enter` e o `returnValue` sem
+  uma linha de JavaScript para keyboard. O botão de cancelar vem primeiro de
+  propósito: o `showModal()` foca o primeiro elemento, e quem abre a caixa com
+  o teclado não pode ter o botão que apaga a fotografia debaixo do dedo.
+{% endcomment %}
+<dialog id="confirmacao" class="modal" aria-labelledby="confirmacao-titulo" aria-describedby="confirmacao-texto">
+  <form method="dialog" class="modal__painel">
+    <h2 id="confirmacao-titulo" class="modal__titulo">Confirmar acção</h2>
+
+    <div class="modal__corpo">
+      <svg class="i modal__icone" aria-hidden="true"><use href="#alert"/></svg>
+      <p id="confirmacao-texto" class="modal__texto"></p>
+    </div>
+
+    <div class="modal__accoes">
+      <button type="submit" value="cancelar" class="btn" data-modal-cancelar>Cancelar</button>
+      <button type="submit" value="confirmar" class="btn btn--danger" data-modal-confirmar>Confirmar</button>
+    </div>
+  </form>
+</dialog>

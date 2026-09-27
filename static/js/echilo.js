@@ -85,6 +85,57 @@
     });
   }
 
+  /* A conversa cresce para baixo e fica no fundo.
+
+     O HTMX acrescenta as mensagens novas ao fim de #chat-body, e o contentor tem
+     max-height com scroll próprio. Sem isto, a conversa ficava a ler de cima
+     e a resposta acabada de chegar ficava fora da área visível — a pessoa
+     escrevia, vê o esqueleto desaparecer, e não vê a resposta. Isto vale
+     igualmente para quem carrega a página numa conversa já longa. */
+  function scrollChatToBottom(alvo) {
+    var corpo = document.getElementById('chat-body');
+    if (!corpo) return;
+    if (alvo && alvo.id && alvo.id !== 'chat-body') return;
+    corpo.scrollTop = corpo.scrollHeight;
+  }
+
+  /* A saudação só pertence ao primeiro render. Depois de haver mensagens ela
+     ficava acima das bolhas, a meio da conversa, e com `beforeend` nunca mais
+     saía de lá. */
+  function removeSaudacao() {
+    var saudacao = document.querySelector('#chat-body .chat__empty');
+    if (saudacao) saudacao.remove();
+  }
+
+  /* O formulário diz ao servidor até onde o cliente já viu, para o servidor
+     acrescentar o que falta em vez de trocar a conversa inteira. O valor é o
+     id da última bolha desenhada — o que o servidor devolve é lido do DOM, e
+     não de um campo que o HTMX actualiza por nós. */
+  function rememberLastMessage() {
+    var corpo = document.getElementById('chat-body');
+    var campo = document.getElementById('ultima-mensagem');
+    if (!corpo || !campo) return;
+    var bolhas = corpo.querySelectorAll('[data-message-id]');
+    if (!bolhas.length) return;
+    campo.value = bolhas[bolhas.length - 1].getAttribute('data-message-id');
+  }
+
+  function setupChat() {
+    var corpo = document.getElementById('chat-body');
+    if (!corpo) return;
+    scrollChatToBottom();
+    rememberLastMessage();
+  }
+
+  function onChatSwap(event) {
+    var alvo = event.detail && event.detail.target;
+    if (alvo && alvo.id === 'chat-body') {
+      removeSaudacao();
+      rememberLastMessage();
+      scrollChatToBottom(alvo);
+    }
+  }
+
   function setupFieldToggles() {
     document.querySelectorAll('.field-control').forEach(function (control) {
       control.addEventListener('invalid', function () {
@@ -288,7 +339,7 @@
     var map = L.map(container, opcoes);
 
 
-    if (config.invertTiles) container.classList.add('area-search__map--invert');
+    if (config.invertTiles) container.classList.add('echilo-map--invert');
 
     var tiles = L.tileLayer(config.tileUrl, {
       attribution: config.attribution,
@@ -401,10 +452,11 @@
 
     /* Fica com o mapa a dizer que divisão está debaixo do círculo, porque quem
        o cria chama-o e sem isto o texto continuaria a dizer a província anterior
-       até o utilizador mexer no mapa. */
+       até o utilizador mexer no mapa. As divisões são as mesmas que o seletor de
+       pin consulta, e o desenho é que é só deste mapa. */
     var fronteiras = setupFronteiras(map, config, function () {
       return areaGroup.getLayers()[0] || null;
-    });
+    }, divisoesDoMapa(config));
 
     function clampRadius(value) {
       var metres = Math.round(Number(value));
@@ -512,22 +564,8 @@
        A recusa é o caso comum, não a excepção: a permissão é pedida por
        Navegador, um site em HTTP simples não a dá, e há quem não a quer dar.
        Por isso cada recusa diz o que aconteceu e volta sempre ao caminho que
-       já funcionava — desenhar o círculo, que não depende de ninguém. Um botão
-       que falha em silêncio parece um botão que não funciona. */
-    function motivoDaRecusa(erro) {
-      if (erro && erro.code === 1) {
-        return 'O navegador não deu permissão para a localização. Active-a nas '
-          + 'permissões deste site, ou desenhe o círculo à mão.';
-      }
-      if (erro && erro.code === 2) {
-        return 'O navegador não consegue determinar onde está. Desenhe o círculo à mão.';
-      }
-      if (erro && erro.code === 3) {
-        return 'A localização demorou demais a chegar. Tente outra vez, ou desenhe o círculo à mão.';
-      }
-      return 'Não foi possível ler a sua localização. Desenhe o círculo à mão.';
-    }
-
+        já funcionava — desenhar o círculo, que não depende de ninguém. Um botão
+        que falha em silêncio parece um botão que não funciona. */
     function centrarNaLocalizacao() {
       if (locateButton) {
         locateButton.disabled = true;
@@ -581,7 +619,7 @@
             locateButton.disabled = false;
             locateButton.removeAttribute('aria-busy');
           }
-          avisoLocal(motivoDaRecusa(erro), true);
+          avisoLocal(motivoDaRecusa(erro, 'desenhe o círculo à mão'), true);
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
       );
@@ -660,26 +698,884 @@
     document.body.addEventListener('htmx:afterSettle', refreshSize);
   }
 
-  /* A camada administrativa: as divisões que o mapa está a mostrar.
+  /* A recusa da geolocalização, com a alternativa de cada mapa.
 
-     Um mapa sem nomes obriga o utilizador a adivinhar. Ele vê um círculo e não
-     sabe se pegou em Viana ou em Talatona, e a única forma de saber é sair do
-     mapa e procurar. As etiquetas respondem a isso.
+     Não é uma função por mapa: as duas páginas precisam da mesma tradução, e uma
+     versão por mapa é uma versão que um dia diverge. O que muda é a alternativa,
+     porque cada mapa tem o seu caminho que não depende de ninguém — desenhar um
+     círculo no catálogo, carregar no chão na ficha. Uma recusa que não oferece
+     nenhum dos dois parece um botão que não funciona. */
+  function motivoDaRecusa(erro, alternativa) {
+    if (erro && erro.code === 1) {
+      return 'O navegador não deu permissão para a localização. Active-a nas '
+        + 'permissões deste site, ou ' + alternativa + '.';
+    }
+    if (erro && erro.code === 2) {
+      return 'O navegador não consegue determinar onde está. ' + alternativa + '.';
+    }
+    if (erro && erro.code === 3) {
+      return 'A localização demorou demais a chegar. Tente outra vez, ou '
+        + alternativa + '.';
+    }
+    return 'Não foi possível ler a sua localização. ' + alternativa + '.';
+  }
 
-     As províncias vêm no primeiro carregamento porque são 73 KB e porque uma
-     província é a resposta que quase toda a gente quer. Os municípios vão num
-     ficheiro separado, pedido só quando o utilizador se aproxima ou desenha um
-     círculo: 556 KB para desenhar 157 contornos que ninguém ia ver a zoom 9
-     pagariam-se na primeira pintura. */
-  function setupFronteiras(map, config, circuloActual) {
-    var contexto = document.getElementById('area-fraccao');
-    if (!contexto) return { nomeia: function () {}, pedirMunicipios: function () {} };
-    var container = map.getContainer();
+  /* Seletor de pin da ficha de curadoria (§2.3).
 
+     A equipa não escreve coordenadas: carrega no chão, arrasta, ou diz onde está
+     com o próprio corpo. O que o mapa faz é escrever isso nos campos, e o que os
+     campos fazem é sobreviver ao mapa desaparecer.
+
+     Três propriedades vêm do resto do ficheiro e valem aqui tanto como lá:
+
+     - O mapa é melhoria progressiva. Se o Leaflet não carregou, a secção
+       desaparece e os campos ficam de fora à espera de serem escritos à mão.
+     - A recusa da permissão volta sempre ao caminho que não depende de ninguém,
+       e o caminho agora é carregar no mapa — não desenhar um círculo.
+     - Um ponto com valor por preencher nunca é inventado. Sem pin, o mapa mostra
+       o centro configurado; o primeiro clique é que decide onde está o imóvel. */
+  function setupConfirmacoes() {
+    // Delegado no documento, e não um listener por botão: o botão de apagar
+    // nasce e morre com cada carregamento da ficha, e um listener por botão
+    // deixava de valer para o botão seguinte. Apagar uma fotografia é
+    // irreversível — o ficheiro vai com a linha — e um clique por engano tira
+    // uma fotografia que ainda se queria, sem forma de a recuperar.
+    var dialogo = document.getElementById('confirmacao');
+    var disparador = null;
+    var rotulado = false;
+
+    // Uma caixa de selecção não confirma pelo clique: o browser já a marcou
+    // quando o `change` chega, e o que a confirmação decide é se essa marca
+    // fica. Por isso o caminho do clique não a toca.
+    function eCaixa(node) {
+      return !!node && node.tagName === 'INPUT' && node.type === 'checkbox';
+    }
+
+    function abrir(botao) {
+      if (!dialogo || typeof dialogo.showModal !== 'function') return;
+      // `showModal()` numa caixa já aberta lança `InvalidStateError`. Sem este
+      // `if`, um segundo clique durante a confirmação atira a excepção e a
+      // acção destrutiva segue sem ninguém a ter lido.
+      if (dialogo.open) return;
+
+      var titulo = dialogo.querySelector('#confirmacao-titulo');
+      var texto = dialogo.querySelector('#confirmacao-texto');
+      var aceitar = dialogo.querySelector('[data-modal-confirmar]');
+
+      if (titulo) {
+        titulo.textContent = botao.getAttribute('data-confirmar-titulo')
+          || 'Confirmar acção';
+      }
+      if (texto) {
+        texto.textContent = botao.getAttribute('data-confirmar') || '';
+      }
+      if (aceitar) {
+        aceitar.textContent = botao.getAttribute('data-confirmar-ok') || 'Confirmar';
+      }
+
+      disparador = botao;
+      dialogo.showModal();
+    }
+
+    // `close` dispara para os três ways de sair: `Esc`, `Enter` na caixa e o
+    // clique num dos dois botões. O `returnValue` diz qual deles foi, e o que
+    // não for `confirmar` é cancelamento — incluindo o `Esc`, que chega com
+    // string vazia.
+    if (dialogo) {
+      dialogo.addEventListener('close', function () {
+        var confirmado = dialogo.returnValue === 'confirmar';
+        var alvo = disparador;
+        disparador = null;
+        if (!alvo) return;
+
+        if (eCaixa(alvo)) {
+          // Confirmado fica marcada, cancelado volta atrás. Deixar a marca
+          // como estava depois de escrever "Cancelar" era dizer uma coisa na
+          // caixa e fazer outra no formulário.
+          alvo.checked = confirmado;
+          return;
+        }
+
+        if (!confirmado) return;
+        // A marca impede que o clique que estamos a repetir volte a abrir a
+        // caixa: o `_click()` passa pelo mesmo delegado, e sem isto a acção
+        // pedia confirmação a si própria.
+        rotulado = true;
+        try {
+          alvo.click();
+        } finally {
+          rotulado = false;
+        }
+      });
+    }
+
+    document.addEventListener('click', function (event) {
+      var botao = event.target.closest('[data-confirmar]');
+      if (!botao) return;
+      if (rotulado) return;
+      if (eCaixa(botao)) return;
+
+      // Sem a caixa, ou num browser sem `<dialog>`, o clique segue o seu curso.
+      // Bloquear aqui era tornar a acção impossível em vez de confirmada: o
+      // botão nasce no servidor e sem JavaScript não há modal, e um `<dialog>`
+      // que não abre é uma caixa que engole o clique sem explicar porquê.
+      if (!dialogo || typeof dialogo.showModal !== 'function') return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      abrir(botao);
+    });
+
+    // A caixa de selecção é o outro tipo de acção destrutiva do projecto:
+    // marcar é o gesto, e é o que a caixa de selecção faz. Sem JavaScript ela
+    // continua a funcionar — a fotografia só some quando o formulário é
+    // guardado, e quem a marcou foi o próprio titular.
+    document.addEventListener('change', function (event) {
+      var botao = event.target.closest('[data-confirmar]');
+      if (!botao || !eCaixa(botao)) return;
+      if (!botao.checked) return;
+      if (!dialogo || typeof dialogo.showModal !== 'function') return;
+      abrir(botao);
+    });
+  }
+
+  function setupCardCarousels() {
+    var grupos = Array.prototype.slice.call(document.querySelectorAll('[data-fotos]'));
+    if (!grupos.length) return;
+
+    // Quem pede menos movimento não recebe a transição; recebe a troca
+    // instantânea, que é a mesma informação sem a animação. O que não se faz é
+    // desligar a rotação: o pedido foi para as fotos mudarem, e quem pede
+    // menos movimento quer menos movimento, não menos fotos. A regra mora no
+    // CSS, que é onde o browser sabe melhor, e por isso este código não pergunta
+    // nada sobre o `prefers-reduced-motion`.
+    var botao = document.querySelector('[data-alvo-fotos]');
+    var carrosseis = [];
+    var parados = false;
+
+    function avancar(controlador) {
+      var fotos = controlador.fotos;
+      var seguinte = (controlador.indice + 1) % fotos.length;
+      var alvo = fotos[seguinte];
+      var anterior = controlador.indice;
+
+      // A fotografia seguinte entra por `data-src` e só troca de lugar depois
+      // de estar descodificada. Atribuir o endereço e mudar a opacidade no
+      // mesmo instante mostra metade de uma fotografia, que se lê como erro
+      // de carregamento e não como transição.
+      if (!alvo.getAttribute('src') && alvo.getAttribute('data-src')) {
+        alvo.setAttribute('src', alvo.getAttribute('data-src'));
+      }
+      var pronto = alvo.decode ? alvo.decode().catch(function () {}) : Promise.resolve();
+
+      return pronto.then(function () {
+        // Entre a marcação e a troca pode ter passado o intervalo todo se a
+        // página esteve em segundo plano. Só se troca se a pessoa não tiver
+        // entretanto mexido no cartão.
+        if (controlador.indice !== anterior) return;
+        fotos[anterior].classList.remove('is-ativa');
+        fotos[anterior].setAttribute('aria-hidden', 'true');
+        alvo.classList.add('is-ativa');
+        alvo.removeAttribute('aria-hidden');
+        controlador.indice = seguinte;
+      });
+    }
+
+    function podeRodar(controlador) {
+      return !parados && controlador.visivel && !controlador.apontado && !document.hidden;
+    }
+
+    function marcar(controlador, aguardar) {
+      window.clearTimeout(controlador.relogio);
+      controlador.relogio = window.setTimeout(function () {
+        if (podeRodar(controlador)) avancar(controlador);
+        marcar(controlador, controlador.intervalo);
+      }, aguardar);
+    }
+
+    grupos.forEach(function (grupo, posicao) {
+      var fotos = Array.prototype.slice.call(grupo.querySelectorAll('.card-property__foto'));
+      if (fotos.length < 2) return;
+
+      var controlador = {
+        fotos: fotos,
+        indice: 0,
+        intervalo: Number(grupo.getAttribute('data-intervalo')) || 40000,
+        cartao: grupo.closest('.card-property') || grupo,
+        relogio: null,
+        visivel: true,
+        apontado: false
+      };
+      carrosseis.push(controlador);
+
+      // Escalonados: seis cartões a virar no mesmo segundo parecem um defeito.
+      // O desvio é uma fracção do intervalo e começa em `posicao + 1`: com
+      // `posicao` a primeira fotografia mudava no carregamento da página, e o
+      // escalonamento existia para evitar precisamente isso.
+      marcar(
+        controlador,
+        Math.round(((posicao + 1) * controlador.intervalo) / (grupos.length + 1))
+      );
+
+      // Só conta o que está à vista. Uma grelha abaixo da dobra não tem
+      // ninguém a olhar, e o temporizador a acordar de meio em meio minuto
+      // para ninguém ver nada é trabalho que se paga e não se aproveita.
+      if ('IntersectionObserver' in window) {
+        new IntersectionObserver(
+          function (entradas) {
+            controlador.visivel = entradas[0].isIntersecting;
+          },
+          { threshold: 0.15 }
+        ).observe(controlador.cartao);
+      }
+
+      // Passar o rato no cartão ou estar a navegar por teclado dentro dele
+      // pára a rotação. Quem está a ler o preço de uma casa não quer a
+      // fotografia por baixo a mudar a meio de uma linha.
+      controlador.cartao.addEventListener('mouseenter', function () {
+        controlador.apontado = true;
+      });
+      controlador.cartao.addEventListener('mouseleave', function () {
+        controlador.apontado = false;
+        marcar(controlador, controlador.intervalo);
+      });
+      controlador.cartao.addEventListener('focusin', function () {
+        controlador.apontado = true;
+      });
+      controlador.cartao.addEventListener('focusout', function () {
+        controlador.apontado = false;
+        marcar(controlador, controlador.intervalo);
+      });
+    });
+
+    if (!carrosseis.length) return;
+
+    // Um separador em segundo plano não precisa de trocar fotografias: o
+    // temporizador continua a correr, o relógio não pára, e a pessoa volta a
+    // ver a página com a fotografia trocada sem nunca a ter visto.
+    document.addEventListener('visibilitychange', function () {
+      carrosseis.forEach(function (controlador) {
+        marcar(controlador, controlador.intervalo);
+      });
+    });
+
+    // O botão é o mecanismo de paragem que a WCAG 2.2.2 pede para conteúdo que
+    // muda sozinho, e está escondido no HTML: sem JavaScript não há rotação
+    // para parar, e um botão que não faz nada é pior do que não ter botão.
+    if (botao) {
+      botao.hidden = false;
+      // O estado inicial é a rotação a decorrer. Deixar o `aria-pressed` por
+      // definir é o mesmo que o botão aparecer sem estado: um leitor de ecrã
+      // anuncia "botão premido" a quem o vai carregar pela primeira vez.
+      botao.setAttribute('aria-pressed', 'false');
+      botao.addEventListener('click', function () {
+        parados = !parados;
+        botao.textContent = parados ? 'Retomar fotografias' : 'Pausar fotografias';
+        botao.setAttribute('aria-pressed', parados ? 'true' : 'false');
+        carrosseis.forEach(function (controlador) {
+          marcar(controlador, controlador.intervalo);
+        });
+      });
+    }
+  }
+
+  function setupPinPicker() {
+    var container = document.getElementById('pin-map');
+    if (!container) return;
+
+    var section = container.closest('.pin-map');
+    var config = readJson('pin-map-config', {});
+    var form = container.closest('form');
+
+    if (!window.L || !config.tileUrl) {
+      if (section) section.hidden = true;
+      return;
+    }
+    if (!form) return;
+
+    /* Os campos são procurados pelo `name` e não pelo `id`: o `id` é gerado pelo
+       Django e muda entre o cadastro e a edição, e um seletor de pin que só
+       funciona numa das duas fichas é meia funcionalidade. */
+    var latField = form.querySelector('[name="latitude"]');
+    var lonField = form.querySelector('[name="longitude"]');
+    var accuracyField = form.querySelector('[name="location_accuracy_m"]');
+    var refField = form.querySelector('[name="map_reference"]');
+    var provinciaField = form.querySelector('[name="province_ref"]');
+    var municipioField = form.querySelector('[name="municipality"]');
+    if (!latField || !lonField) return;
+
+    var status = document.getElementById('pin-estado');
+    var divisao = document.getElementById('pin-divisao');
+    var aviso = document.getElementById('pin-aviso');
+    var error = document.getElementById('pin-erro');
+    var locateButton = document.getElementById('pin-localizar');
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    /* Quem clica no mapa sabe que imóvel é e onde fica, e não sabe como se chama
+       a divisão administrativa do ponto. A mesma geometria que nomeia o círculo do
+       catálogo diz qual é, e escreve nos campos. */
+    var divisoes = divisoesDoMapa(config);
+    var pediuFronteiras = false;
+    var pediuMunicipios = false;
+
+    /* A divisão que veio da posição do aparelho fica trancada, e quem a larga é o
+       gesto: um clique, um arrasto ou uma seta no mapa. O trinco é a resposta a uma
+       medição — ninguém reescreve a elipsóide do GPS à mão —, e é reversível de
+       propósito. Trancado sem volta, o município que o GPS atribuiu ao lado
+       errado obrigava a recarregar a página, e o recarregamento levava atrás o
+       título, a descrição e o dono já escritos.
+
+       E é o gesto que levanta, não um botão: um botão de "editar" que fica ali
+       depois de a equipa carregar em "usar a minha posição" outra vez, ou que se
+       esquece ligado, é um estado que ninguém sabe em que está. A origem do ponto
+       é a própria coisa que justifica o trinco, e quem a conhece é o código que
+       largou o ponto. */
+    var espelhos = [];
+
+    function soltaDivisao() {
+      espelhos.forEach(function (espelho) {
+        if (espelho.parentNode) espelho.parentNode.removeChild(espelho);
+      });
+      espelhos = [];
+      if (provinciaField) provinciaField.disabled = false;
+      /* O município volta a editáveis nos dois sentidos: o `readonly` é
+         reescrito, porque o `delete` do valor de um atributo é mais lento de
+         ler do que um `false` e não muda o que o browser faz. */
+      if (municipioField) {
+        municipioField.disabled = false;
+        municipioField.readOnly = false;
+      }
+      [provinciaField, municipioField].forEach(function (campo) {
+        if (campo) campo.classList.remove('is-fixed');
+      });
+    }
+
+    /* Trancar um campo é tirá-lo do pedido, e o `POST` é o que grava o imóvel.
+       Um `disabled` sem espelho levava a província e o município embora o
+       formulário fosse válido, e o sintoma seria um imóvel sem divisão depois de
+       a página ter dito que estava tudo certo.
+
+       Cada campo recebe o tratamento que o seu tipo permite: o `select` não tem
+       `readonly`, e o `readonly` do texto viaja no pedido — por isso um é
+       `disabled` com espelho e o outro é `readonly` sem espelho. Os dois ficam
+       com a mesma aparência, e os dois continuam legíveis por quem usa leitor de
+       ecrã: um campo desactivado some do alcance do teclado, e o valor que a
+       equipa precisa de confirmar é precisamente o que não pode desaparecer. */
+    function prendeDivisao(campo, modo) {
+      if (!campo || !campo.value) return false;
+      campo.classList.add('is-fixed');
+      if (modo === 'readonly') {
+        campo.readOnly = true;
+        return true;
+      }
+      /* O espelho que já existe é reescrito em vez de duplicado. Uma segunda
+         leitura do aparelho pode dar outra divisão, e um espelho com o valor
+         antigo gravava a província errada sem nada na página dizer que estava
+         errada. */
+      var espelho = null;
+      espelhos.forEach(function (procurado) {
+        if (procurado.name === campo.name) espelho = procurado;
+      });
+      if (!espelho) {
+        espelho = document.createElement('input');
+        espelho.type = 'hidden';
+        espelho.name = campo.name;
+        if (campo.parentNode) campo.parentNode.insertBefore(espelho, campo.nextSibling);
+        espelhos.push(espelho);
+      }
+      espelho.value = campo.value;
+      campo.disabled = true;
+      return true;
+    }
+
+    /* Cada campo prende-se só se o mapa o preencheu, e cada um por si. A fonte não
+       desenha trinta e tal municípios (§2.12): um deles fica por escrever à mão
+       mesmo com a província trancada ao lado, e o contrário também — trancar um
+       campo vazio é um formulário que não sai e não tem como ser corrigido. */
+
+    // Um grau por 1000 dá cerca de 111 m, que é afinar a esquina de um prédio.
+    // Com Shift o passo é cinco vezes maior, para quem está a quarteirão.
+    var PASSO = 1 / 1000;
+    var PASSO_GRANDE = 1 / 5000;
+
+    var latActual = numeroOu(latField.value, null);
+    var lonActual = numeroOu(lonField.value, null);
+    var temPin = latActual !== null && lonActual !== null;
+
+    var opcoes = {
+      center: temPin
+        ? [latActual, lonActual]
+        : [Number(config.centerLat), Number(config.centerLon)],
+      zoom: temPin ? 16 : (Number(config.zoom) || 13),
+      scrollWheelZoom: false,
+      zoomAnimation: !reduceMotion,
+      fadeAnimation: !reduceMotion
+    };
+
+    var map = L.map(container, opcoes);
+
+    if (config.invertTiles) container.classList.add('echilo-map--invert');
+
+    var failedTiles = 0;
+
+    /* Os tiles e a permissão têm caixas separadas, e é a mesma razão que vale no
+       catálogo: um 403 do fornecedor a apagar a recusa da geolocalização mandava
+       a equipa seguir o diagnóstico errado. O `alert` é do fornecedor, o
+       `status` é de quem pediu a posição. */
+    function avisoDeTiles() {
+      failedTiles += 1;
+      if (!error || failedTiles < 2) return;
+      error.dataset.origem = 'tiles';
+      error.textContent = 'O mapa não carregou: o fornecedor de tiles recusou o pedido ('
+        + failedTiles + ' tiles). Confirme a rede ou ajuste ECHILO_MAP_TILE_URL no .env. '
+        + 'As coordenadas continuam a poder ser escritas à mão.';
+      error.hidden = false;
+    }
+
+    if (config.configError) {
+      /* Um `{key}` por substituir não se corrige no browser. Dizemos o que falta
+         e seguimos sem imagem: o pin é uma coordenada, não um retrato. */
+      if (error) {
+        error.textContent = config.configError;
+        error.hidden = false;
+      }
+    } else {
+      var tiles = L.tileLayer(config.tileUrl, {
+        attribution: config.attribution,
+        maxZoom: 19
+      });
+      tiles.on('tileerror', avisoDeTiles);
+      tiles.on('tileload', function () {
+        // Só o aviso do fornecedor se apaga com um tile. A recusa da permissão
+        // fica, porque um tile que carregou não a desfaz.
+        if (failedTiles && error && error.dataset.origem === 'tiles') {
+          error.hidden = true;
+          failedTiles = 0;
+        }
+      });
+      tiles.addTo(map);
+    }
+
+    var pin = null;
+
+    /* O nome da divisão que o `select` escreve, lido das opções que o servidor
+       desenhou. O `value` de um option que não existe deixa o campo vazio sem
+       erro nenhum, e um campo que esvaziou sozinho parece um formulário partido. */
+    function rotuloDaProvincia(codigo) {
+      if (!provinciaField) return '';
+      var opcoes = provinciaField.options || [];
+      for (var i = 0; i < opcoes.length; i += 1) {
+        if (opcoes[i].value === codigo) return opcoes[i].text;
+      }
+      return '';
+    }
+
+    /* Escrever a divisão nos campos. É a resposta do mapa, e o que ele não sabe
+       não é escrito: um município que a fonte não desenha fica o que a equipa
+       escreveu, e um ponto no mar deixa a divisão como estava, com a frase que
+       diz porquê.
+
+       `doDispositivo` diz de onde veio o ponto, e é o que decide se a divisão
+       fica trancada: uma posição lida do aparelho é uma medição, e ninguém a
+       reescreve a dedo; um clique é uma escolha. */
+    function nomeiaDivisao(lat, lon, doDispositivo) {
+      if (!divisao && !provinciaField && !municipioField) return;
+
+      if (!divisoes.pronto()) {
+        /* Um ficheiro que falta não pode levar a equipa a clicar outra vez: pede-se
+           uma vez, e a resposta que vier — mesmo sem ficheiro — é a resposta. */
+        if (!pediuFronteiras) {
+          pediuFronteiras = true;
+          divisoes.pedirProvincias(function () { nomeiaDivisao(lat, lon, doDispositivo); });
+        }
+        return;
+      }
+
+      var aqui = divisoes.divisoesDe(lat, lon);
+      var codigos = (config.provinciasPorFronteira || {})[aqui.provincia] || [];
+      var partes = [];
+      var prendeuAlgum = false;
+
+      if (codigos.length === 1 && provinciaField) {
+        provinciaField.value = codigos[0];
+        prendeuAlgum = prendeDivisao(provinciaField, 'disabled') || prendeuAlgum;
+        /* O `change` não é enfeite: a lista de sugestões de município segue a
+           província, e quem não a vê mudar fica com as sugestões da província
+           anterior por baixo de um município que não é dela. O evento dispara-se
+           depois do trinco, porque é o `select` trancado que fica a pedir as
+           sugestões, e é o seu valor que as decide. */
+        provinciaField.dispatchEvent(new Event('change', { bubbles: true }));
+        partes.push('Província de ' + rotuloDaProvincia(codigos[0]) + '.');
+      } else if (codigos.length > 1) {
+        var nomes = [];
+        codigos.forEach(function (codigo) { nomes.push(rotuloDaProvincia(codigo)); });
+        partes.push('A divisão ' + aqui.provincia + ' é ' + nomes.join(' ou ')
+          + ' na lista do projecto. Escolha a que o imóvel pertence: o mapa sabe o'
+          + ' contorno, não a divisão do negócio.');
+      }
+
+      if (aqui.municipio && municipioField) {
+        municipioField.value = aqui.municipio;
+        prendeuAlgum = prendeDivisao(municipioField, 'readonly') || prendeuAlgum;
+        municipioField.dispatchEvent(new Event('change', { bubbles: true }));
+        partes.push('Município de ' + aqui.municipio + '.');
+      } else if (aqui.provincia) {
+        partes.push('O ponto não caiu dentro de nenhum município desenhado; escreva'
+          + ' o município.');
+      }
+
+      if (!partes.length) {
+        partes.push('O ponto caiu fora dos contornos desenhados de Angola. A'
+          + ' província e o município ficam como estavam.');
+      }
+
+      if (doDispositivo && prendeuAlgum) {
+        partes.push('Preenchido a partir da sua posição e trancado, porque uma'
+          + ' posição lida do aparelho não se reescreve a dedo. Carregue no mapa'
+          + ' se a divisão estiver errada.');
+      }
+
+      if (divisao) divisao.textContent = partes.join(' ');
+
+      /* O município vem do ficheiro grande, e a equipa pode estar a olhar para o
+         ponto antes de ele chegar. Sem esta espera, a primeira resposta ficava sem
+         município para sempre — e pedir outra vez aqui, com o ficheiro já
+         carregado, reentrava na função sem sair. */
+      if (aqui.municipio || pediuMunicipios) return;
+      pediuMunicipios = true;
+      divisoes.pedirMunicipios(function () { nomeiaDivisao(lat, lon, doDispositivo); });
+    }
+
+    /* Seis casas nos campos, quatro na referência. Os campos vão para o
+       `Decimal` e para a base de dados, e uma diferença de 0,0001° é pouco mais
+       de dez metros; a referência é o identificador legível do pin (§2.3), e o
+       exemplo do próprio AGENTS tem quatro.
+
+       `doDispositivo` atravessa daqui para a divisão porque é a origem do ponto
+       que decide se a divisão fica trancada, e a resposta a essa pergunta é a
+       mesma para todos os gestos. */
+    function escrevePonto(lat, lon, origem, precisao, doDispositivo) {
+      latField.value = lat.toFixed(6);
+      lonField.value = lon.toFixed(6);
+      if (refField) refField.value = lat.toFixed(4) + ',' + lon.toFixed(4);
+      /* A precisão só se escreve quando o browser a sabe: um clique no mapa não
+         tem precisão, e fingir que tem seria inventar o número que a equipa usa
+         para medir a fiabilidade da inspecção. */
+      if (accuracyField && precisao) accuracyField.value = Math.round(precisao);
+      if (status) {
+        status.textContent = 'Pin em ' + lat.toFixed(4) + ', ' + lon.toFixed(4)
+          + ' — ' + origem + '.'
+          + (precisao ? ' Precisão do navegador: ' + Math.round(precisao) + ' m.'
+            : ' A precisão fica por confirmar pela equipa.');
+      }
+      /* Chamar daqui e não de cada gesto é o que garante que clique, arrasto,
+         setas e geolocalização escrevem a divisão todas: um caminho que se
+         esquecesse deixaria o pin mudado e a divisão antiga, que é a combinação
+         que ninguém percebe. */
+      nomeiaDivisao(lat, lon, doDispositivo);
+    }
+
+    function novoPin(lat, lon) {
+      if (pin) {
+        pin.setLatLng([lat, lon]);
+        return pin;
+      }
+      pin = L.marker([lat, lon], {
+        draggable: true,
+        autoPan: true,
+        keyboard: false,
+        // O pin da equipa não é uma cor de catálogo: dourado é arrendar e verde é
+        // vender, e aqui não há finalidade a comunicar.
+        icon: L.divIcon({
+          className: 'pin-map__ponto',
+          html: '<span aria-hidden="true"></span>',
+          iconSize: [18, 18],
+          iconAnchor: [9, 9]
+        })
+      }).addTo(map);
+      pin.on('dragend', function () {
+        var p = pin.getLatLng();
+        escrevePonto(p.lat, p.lng, 'arrastado no mapa', null, false);
+      });
+      return pin;
+    }
+
+    function larga(lat, lon, origem, precisao, doDispositivo) {
+      if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+      novoPin(lat, lon);
+      /* Um ponto posto à mão destranca a divisão: o trinco respondia à
+         posição do aparelho, e a mão é outra fonte. */
+      if (!doDispositivo) soltaDivisao();
+      escrevePonto(lat, lon, origem, precisao, doDispositivo);
+    }
+
+    /* Um clique longe do pin arrasta-o para lá, e um clique sobre o pin não o
+       duplica. Sem esta distinção, largar o pin duas vezes no mesmo sítio
+       deixava dois marcadores a dizerem a mesma coisa. */
+    map.on('click', function (evento) {
+      if (pin && evento.latlng && pin.getLatLng().distanceTo(evento.latlng) < 1) return;
+      larga(evento.latlng.lat, evento.latlng.lng, 'clique no mapa', null, false);
+    });
+
+    /* As setas movem o pin, e não o mapa, quando já há pin. Sem pin, o teclado
+       continua a fazer o que o Leaflet faz: deslocar a vista para onde não há
+       nada para marcar. Inventar um pin a meio de Angola por causa de uma
+       seta seria pior do que não fazer nada. */
+    container.addEventListener('keydown', function (evento) {
+      var delta = evento.shiftKey ? PASSO_GRANDE : PASSO;
+      var passos = {
+        ArrowUp: [delta, 0],
+        ArrowDown: [-delta, 0],
+        ArrowLeft: [0, -delta],
+        ArrowRight: [0, delta]
+      };
+      var passo = passos[evento.key];
+      if (!passo) return;
+
+      if (!pin) return;
+      evento.preventDefault();
+      var p = pin.getLatLng();
+      largo(Math.max(-90, Math.min(90, p.lat + passo[0])),
+        Math.max(-180, Math.min(180, p.lng + passo[1])),
+        evento.shiftKey ? 'setas com Shift' : 'setas do teclado',
+        null, false);
+    });
+
+    function usarPosicao() {
+      if (locateButton) {
+        locateButton.disabled = true;
+        locateButton.setAttribute('aria-busy', 'true');
+      }
+      if (aviso) aviso.textContent = 'A pedir a sua posição…';
+
+      function terminou() {
+        if (locateButton) {
+          locateButton.disabled = false;
+          locateButton.removeAttribute('aria-busy');
+        }
+      }
+
+      if (!navigator.geolocation) {
+        terminou();
+        if (aviso) {
+          /* A geolocalização só existe em contexto seguro, e dizer porquê vale
+             mais do que um botão que nunca responde. */
+          aviso.textContent = 'Este site não está em HTTPS, e só um site em HTTPS '
+            + 'pode ler a sua localização. Carregue no mapa.';
+        }
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        function (posicao) {
+          var lat = posicao.coords.latitude;
+          var lon = posicao.coords.longitude;
+          map.setView([lat, lon], Math.max(map.getZoom(), 16));
+          /* A mensagem de "a pedir a sua posição" apaga-se antes de o pin entrar.
+             Ao contrário, o `larga` escrevia a divisão e esta linha apagava-a a
+             seguir, e a equipa ficava com o pin mudado e a divisão antiga. */
+          if (aviso) aviso.textContent = '';
+          larga(lat, lon, 'a sua posição actual', posicao.coords.accuracy, true);
+          terminou();
+        },
+        function (erroGeo) {
+          terminou();
+          /* A recusa é escrita no `status` e não no `alert`: o `alert` é do
+             fornecedor de tiles, e trocar as caixas fazia a equipa seguir a pista
+             errada. Todas as terminações voltam a carregar no mapa, que não
+             depende de ninguém. */
+          if (aviso) aviso.textContent = motivoDaRecusa(erroGeo, 'carregue no mapa');
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      );
+    }
+
+    if (locateButton) locateButton.addEventListener('click', usarPosicao);
+
+    if (temPin) novoPin(latActual, lonActual);
+
+    window.addEventListener('resize', function () { map.invalidateSize(); });
+    document.body.addEventListener('htmx:afterSettle', function () { map.invalidateSize(); });
+  }
+
+  function numeroOu(valor, quandoVazio) {
+    if (valor === null || valor === undefined) return quandoVazio;
+    var limpo = String(valor).trim().replace(',', '.');
+    if (limpo === '') return quandoVazio;
+    var n = Number(limpo);
+    return isNaN(n) ? quandoVazio : n;
+  }
+
+  /* Distância em metros, para saber que municípios cabem no raio escolhido.
+     É o mesmo haversine de `apps.core.geo`, reescrito porque o Python não
+     chega ao browser. */
+  function distanciaMetros(aLat, aLon, bLat, bLon) {
+    var raio = 6371000;
+    var dLat = (bLat - aLat) * Math.PI / 180;
+    var dLon = (bLon - aLon) * Math.PI / 180;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+      + Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180)
+      * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * raio * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  /* As divisões de Angola, e a única coisa que o mapa sabe dizer sobre elas.
+
+     Isto responde a uma pergunta — que província e que município são este ponto
+     — e não desenha nada. O desenho é de quem chama: o catálogo põe os contornos
+     por baixo dos pinos, e o seletor de pin não precisa de arame nenhum para
+     saber em que divisão está a casa que a equipa está a marcar.
+
+     Vive fora do `setupFronteiras` porque as duas páginas com mapa precisam da
+     resposta e só uma precisa do desenho. Duas redações do mesmo
+     ponto-em-polígono divergem, e a segunda é a que ninguém actualiza. */
+  function divisoesDoMapa(config) {
     var provincias = null;
     var municipios = null;
-    var aPedirMunicipios = false;
-    var linhas = {};
+    var aPedir = { provincias: false, municipios: false };
+    /* As perguntas que ainda não têm resposta. Carregar o ficheiro dos municípios
+       leva tempo, e quem clica no pin nesse intervalo fez uma pergunta que só se
+       responde depois: sem esta fila, o primeiro clique ficava sem nome e o
+       segundo preenchia o campo com o município do ponto anterior. */
+    var pendentes = [];
+
+    function responde() {
+      var aChamar = pendentes;
+      pendentes = [];
+      aChamar.forEach(function (fn) { fn(); });
+    }
+
+    /* O `MultiPolygon` do GeoJSON é uma lista de polígonos, cada um com os seus
+       anéis. O teste de ponto-em-polígono quer os anéis todos, e só ele sabe os
+       pedidos uns a uns. */
+    function aneisDe(geojson) {
+      var saida = [];
+      geojson.geometry.coordinates.forEach(function (poligono) {
+        saida = saida.concat(poligono);
+      });
+      return saida;
+    }
+
+    /* Teste de ponto-em-polígono por crossings, o mesmo do comando que gerou a
+       camada. O índice anterior fecha o anel no fim, senão o último segmento não
+       conta.
+
+       A geometria vem em `[lon, lat]`, a ordem do GeoJSON, e o `x` é a longitude.
+       O `properties.ponto` vem ao contrário, em `[lat, lon]`, porque esse é o
+       `L.circleMarker` que o recebe. São dois contratos diferentes no mesmo
+       ficheiro, e trocar um deles punha o mapa a dizer que Luanda estava no mar. */
+    function dentroDe(lat, lon, aneis) {
+      var dentro = false;
+      for (var a = 0; a < aneis.length; a += 1) {
+        var anel = aneis[a];
+        for (var i = 0, j = anel.length - 1; i < anel.length; j = i, i += 1) {
+          var xi = anel[i][0];
+          var yi = anel[i][1];
+          var xj = anel[j][0];
+          var yj = anel[j][1];
+          if ((yi > lat) !== (yj > lat)
+            && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
+            dentro = !dentro;
+          }
+        }
+      }
+      return dentro;
+    }
+
+    /* A província vem do município, não do contorno provincial.
+
+       As duas camadas da fonte não coincidem: o município de Luanda cobre a baía e
+       o centro, e o contorno provincial da fonte tem esse recorte a menos. Perguntar
+       à província sozinha dava "fora dos contornos" com o ponto no meio de Luanda,
+       que é a última coisa que se quer ler. Derivada do município, as duas
+       respostas concordam por construção. O contorno provincial continua a ser o que
+       se desenha. */
+    function municipioEm(lat, lon) {
+      var achado = null;
+      if (municipios) {
+        municipios.features.forEach(function (m) {
+          if (!achado && dentroDe(lat, lon, aneisDe(m))) achado = m.properties;
+        });
+      }
+      return achado;
+    }
+
+    function provinciaDe(lat, lon) {
+      var nome = '';
+      if (!provincias) return nome;
+      provincias.features.forEach(function (p) {
+        if (!nome && dentroDe(lat, lon, aneisDe(p))) nome = p.properties.nome;
+      });
+      return nome;
+    }
+
+    function nomeDaProvincia(codigo) {
+      var nome = '';
+      if (!provincias) return nome;
+      provincias.features.forEach(function (p) {
+        if (!nome && p.properties.codigo === codigo) nome = p.properties.nome;
+      });
+      return nome;
+    }
+
+    function divisoesDe(lat, lon) {
+      var municipio = municipioEm(lat, lon);
+      var nome = municipio ? nomeDaProvincia(municipio.provincia) : '';
+      if (!nome) nome = provinciaDe(lat, lon);
+      return { provincia: nome, municipio: municipio ? municipio.nome : '' };
+    }
+
+    /* Os ficheiros são um extra: perdê-los é chato, e a página não pode ir atrás
+       por isso. A falha chama as perguntas na mesma, para que cada mapa decida o
+       que faz sem resposta em vez de repetir o pedido para sempre. */
+    function carrega(url, quandoChegar) {
+      fetch(url)
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (dados) { if (dados) quandoChegar(dados); })
+        .catch(function () { })
+        .then(responde);
+    }
+
+    /* As províncias vêm no primeiro carregamento porque são 73 KB e porque uma
+       província é a resposta que quase toda a gente quer. Os municípios vão num
+       ficheiro separado, pedido só quando a pergunta já não se responde sem eles:
+       556 KB para 157 contornos que ninguém ia ver a zoom 9. */
+    function pedirProvincias(quando) {
+      if (provincias) { if (quando) quando(); return; }
+      if (quando) pendentes.push(quando);
+      if (aPedir.provincias) return;
+      aPedir.provincias = true;
+      carrega(config.provinciasUrl, function (dados) { provincias = dados; });
+    }
+
+    function pedirMunicipios(quando) {
+      if (municipios) { if (quando) quando(); return; }
+      if (quando) pendentes.push(quando);
+      if (aPedir.municipios) return;
+      aPedir.municipios = true;
+      carrega(config.municipiosUrl, function (dados) { municipios = dados; });
+    }
+
+    return {
+      divisoesDe: divisoesDe,
+      provincias: function () { return provincias; },
+      municipios: function () { return municipios; },
+      pronto: function () { return provincias !== null; },
+      pedirProvincias: pedirProvincias,
+      pedirMunicipios: pedirMunicipios
+    };
+  }
+
+  /* A camada administrativa: os contornos que o mapa desenha por baixo dos pinos.
+
+     Um mapa sem nomes obriga o utilizador a adivinhar. Vê um círculo e não sabe
+     se pegou em Viana ou em Talatona, e a única forma de saber é sair do mapa e
+     procurar. As etiquetas respondem a isso.
+
+     O desenho é só daqui. Saber que divisão é um ponto é de `divisoesDoMapa`, e
+     o seletor de pin usa essa resposta sem levar nenhum destes arames. */
+  function setupFronteiras(map, config, circuloActual, divisoes) {
+    var container = map.getContainer();
 
     /* As linhas vão para um pane próprio, abaixo dos pinos. No `overlayPane` de
        um Leaflet normal, que está acima dos marcadores, o contorno de uma
@@ -688,10 +1584,12 @@
     map.getPane('limites').style.zIndex = 350;
     map.getPane('limites').style.pointerEvents = 'none';
 
+    var linhas = {};
+
     /* O ficheiro é uma `FeatureCollection`, e o Leaflet sabe desenhá-la. Cada
        contorno recebe a sua classe: os municípios precisam de desaparecer quando
-       se afasta, e 157 linhas que não se apagam enchem o mapa de arame de Angola
-       a ver o país inteiro.
+       se afasta, e 157 linhas que não se apagam enchem o mapa de arame de Angola a
+       ver o país inteiro.
 
        O nome não vai no centro da camada, que é o centro da caixa envolvente: numa
        província comprida como a de Luanda isso dá um ponto no mar, e o mapa
@@ -723,113 +1621,30 @@
       return { linhas: camada, rotulos: rotulos };
     }
 
-    /* O `MultiPolygon` do GeoJSON é uma lista de polígonos, cada um com os seus
-       anéis. O teste de ponto-em-polígono quer os anéis todos, e só ele sabe os
-       pedidos uns a uns. */
-    function aneisDe(geojson) {
-      var saida = [];
-      geojson.geometry.coordinates.forEach(function (poligono) {
-        saida = saida.concat(poligono);
-      });
-      return saida;
+    /* O nome do círculo escreve-se no elemento que o catálogo traz no HTML. As
+       duas páginas partilham esta função e só uma tem onde mostrar a resposta, e
+       escrevê-la na mesma é o que evita a segunda pessoa tentar mostrar uma
+       resposta num elemento que não existe. */
+    function escreve(texto) {
+      var contexto = document.getElementById('area-fraccao');
+      if (contexto) contexto.textContent = texto;
     }
 
-    /* Teste de ponto-em-polígono por crossings, o mesmo do comando que gerou a
-       camada. `anterior` fecha o anel no fim, senão o último segmento não conta.
-
-       A geometria vem em `[lon, lat]`, a ordem do GeoJSON, e o `x` é a
-       longitude. O `properties.ponto` vem ao contrário, em `[lat, lon]`, porque
-       esse é o `L.circleMarker` que recebe. São dois contratos diferentes no
-       mesmo ficheiro, e trocar um deles punha o mapa a dizer que Luanda estava
-       no mar. */
-    function dentroDe(lat, lon, aneis) {
-      var dentro = false;
-      for (var a = 0; a < aneis.length; a += 1) {
-        var anel = aneis[a];
-        for (var i = 0, j = anel.length - 1; i < anel.length; j = i, i += 1) {
-          var xi = anel[i][0];
-          var yi = anel[i][1];
-          var xj = anel[j][0];
-          var yj = anel[j][1];
-          if ((yi > lat) !== (yj > lat)
-            && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
-            dentro = !dentro;
-          }
-        }
-      }
-      return dentro;
-    }
-
-    /* Distância em metros, para saber que municípios cabem no raio escolhido.
-       É o mesmo haversine de `apps.core.geo`, reescrito porque o Python não
-       chega ao browser. */
-    function distanciaMetros(aLat, aLon, bLat, bLon) {
-      var raio = 6371000;
-      var dLat = (bLat - aLat) * Math.PI / 180;
-      var dLon = (bLon - aLon) * Math.PI / 180;
-      var h = Math.sin(dLat / 2) * Math.sin(dLat / 2)
-        + Math.cos(aLat * Math.PI / 180) * Math.cos(bLat * Math.PI / 180)
-        * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-      return 2 * raio * Math.asin(Math.min(1, Math.sqrt(h)));
-    }
-
-    /* A província vem do município, não do contorno provincial.
-
-       As duas camadas da fonte não coincidem: o município de Luanda cobre a
-       baía e o centro, e o contorno provincial da fonte tem esse recorte a
-       menos. Perguntar à província sozinha dava "fora dos contornos" com o
-       círculo desenhado no meio de Luanda, que é a última coisa que se quer
-       ler. Derivada do município, as duas respostas concordam por construção, e
-       o município sai do mesmo acerto. O contorno provincial continua a ser o
-       que se desenha. */
-    function municipioEm(lat, lon) {
-      var achado = null;
-      if (municipios) {
-        municipios.features.forEach(function (m) {
-          if (!achado && dentroDe(lat, lon, aneisDe(m))) achado = m.properties;
-        });
-      }
-      return achado;
-    }
-
-    function provinciaDe(lat, lon) {
-      var nome = '';
-      provincias.features.forEach(function (p) {
-        if (!nome && dentroDe(lat, lon, aneisDe(p))) nome = p.properties.nome;
-      });
-      return nome;
-    }
-
-    function nomeDaProvincia(codigo) {
-      var nome = '';
-      provincias.features.forEach(function (p) {
-        if (!nome && p.properties.codigo === codigo) nome = p.properties.nome;
-      });
-      return nome;
-    }
-
-    function divisoesDe(lat, lon) {
-      var municipio = municipioEm(lat, lon);
-      var nome = municipio ? nomeDaProvincia(municipio.provincia) : '';
-      if (!nome) nome = provinciaDe(lat, lon);
-      return { provincia: nome, municipio: municipio ? municipio.nome : '' };
-    }
-
-    /* O que o círculo apanha. A província vem do centro: é a resposta que se
-       espera e não depende de o raio cair dentro ou fora de uma fronteira. Os
-       municípios listam-se por rótulo dentro do raio, o que permite dizer
-       "inclui Talatona" num círculo de 20 km em vez de escolher um e esconder o
-       resto. */
+    /* O que o círculo apanha. A província vem do centro: é a resposta que se espera
+       e não depende de o raio cair dentro ou fora de uma fronteira. Os municípios
+       listam-se por rótulo dentro do raio, o que permite dizer "inclui Talatona"
+       num círculo de 20 km em vez de escolher um e esconder o resto. */
     function nomeia() {
-      if (!provincias) return;
+      if (!divisoes.pronto()) return;
       var circulo = circuloActual();
+      var municipios = divisoes.municipios();
 
       if (!circulo) {
         var centro = map.getCenter();
-        var aqui = divisoesDe(centro.lat, centro.lng);
+        var aqui = divisoes.divisoesDe(centro.lat, centro.lng);
         var texto = aqui.provincia ? 'A mostrar: província de ' + aqui.provincia : '';
         if (aqui.municipio) texto += ', município de ' + aqui.municipio;
-        contexto.textContent = texto ? texto + '.' : '';
+        escreve(texto ? texto + '.' : '');
         return;
       }
 
@@ -837,15 +1652,15 @@
       var raio = circulo.getRadius();
 
       if (!municipios) {
-        contexto.textContent = 'A carregar os municípios deste círculo.';
+        escreve('A carregar os municípios deste círculo.');
         return;
       }
 
       // O número de divisões que o mapa desenha e o número de províncias que o
-      // projecto tem não são o mesmo número, e este texto não deve prometer
-      // nenhum dos dois: o que o mapa sabe é se o ponto caiu dentro de algum
-      // contorno, e é isso que ele diz.
-      var aqui = divisoesDe(ponto.lat, ponto.lng);
+      // projecto tem não são o mesmo número, e este texto não deve prometer nenhum
+      // dos dois: o que o mapa sabe é se o ponto caiu dentro de algum contorno, e é
+      // isso que ele diz.
+      var aqui = divisoes.divisoesDe(ponto.lat, ponto.lng);
       var texto = aqui.provincia
         ? 'Província de ' + aqui.provincia
         : 'Fora dos contornos desenhados';
@@ -859,37 +1674,11 @@
         }
       });
       if (incluidos.length) texto += ', inclui ' + incluidos.join(', ');
-      contexto.textContent = texto + '.';
-    }
-
-    function pedeMunicipios() {
-      if (aPedirMunicipios || municipios) return;
-      aPedirMunicipios = true;
-      fetch(config.municipiosUrl)
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (dados) {
-          if (!dados) return;
-          municipios = dados;
-          linhas.municipios = desenha(
-            dados, 'divisao-label divisao-label--municipio'
-          );
-          nomeia();
-        })
-        .catch(function () { aPedirMunicipios = false; });
-    }
-
-    /* Aproximar pede a camada dos municípios, e afastar esconde-a. A classe é
-       o gancho do CSS para os nomes; as linhas e os rótulos precisam do seu,
-       senão o mapa fica coberto de fronteiras que já não significam nada a esta
-       escala. */
-    function talvezMunicipios() {
-      var perto = map.getZoom() >= (config.zoomMunicipios || 10);
-      container.classList.toggle('zoom-municipios', perto);
-      if (linhas.municipios) põeMunicipios(perto);
-      if (perto) pedeMunicipios();
+      escreve(texto + '.');
     }
 
     function põeMunicipios(visivel) {
+      if (!linhas.municipios) return;
       if (visivel) {
         linhas.municipios.linhas.addTo(map);
         linhas.municipios.rotulos.addTo(map);
@@ -899,32 +1688,50 @@
       }
     }
 
-    fetch(config.provinciasUrl)
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (dados) {
-        if (!dados) return;
-        provincias = dados;
-        linhas.provincias = desenha(dados, 'divisao-label divisao-label--provincia');
-        nomeia();
-        talvezMunicipios();
-      })
-      .catch(function () {
-        // As linhas são um extra. O raio, os pinos e a pesquisa não dependem
-        // delas, e um ficheiro em falta não pode levar a página atrás.
-      });
+    /* A camada dos municípios entra uma vez, e é preciso no primeiro `zoomend`,
+       que acontece antes de alguém pedir nada. */
+    function desenhaMunicipios() {
+      if (linhas.municipios || !divisoes.municipios()) return false;
+      linhas.municipios = desenha(
+        divisoes.municipios(), 'divisao-label divisao-label--municipio'
+      );
+      return true;
+    }
+
+    function talvezMunicipios() {
+      var perto = map.getZoom() >= (config.zoomMunicipios || 10);
+      container.classList.toggle('zoom-municipios', perto);
+      if (linhas.municipios) põeMunicipios(perto);
+      if (perto) {
+        divisoes.pedirMunicipios(function () {
+          if (desenhaMunicipios()) põeMunicipios(true);
+          nomeia();
+        });
+      }
+    }
+
+    divisoes.pedirProvincias(function () {
+      if (!divisoes.provincias() || linhas.provincias) return;
+      linhas.provincias = desenha(
+        divisoes.provincias(), 'divisao-label divisao-label--provincia'
+      );
+      talvezMunicipios();
+    });
 
     map.on('zoomend', talvezMunicipios);
     map.on('moveend', nomeia);
 
-    /* Desenhar o círculo também traz os municípios. Quem escolhe uma área está
-       a perguntar exactamente por que municípios ela cobre, e esperar por um
-       zoom de fora responder à pergunta que ele já fez é deixá-lo à espera. */
+    /* Desenhar o círculo também traz os municípios. Quem escolhe uma área está a
+       perguntar exactamente por que municípios ela cobre, e esperar por um zoom de
+       fora responder à pergunta que ele já fez é deixá-lo à espera. */
     return {
       nomeia: nomeia,
       pedirMunicipios: function () {
         container.classList.add('zoom-municipios');
-        if (linhas.municipios) põeMunicipios(true);
-        pedeMunicipios();
+        divisoes.pedirMunicipios(function () {
+          if (desenhaMunicipios()) põeMunicipios(true);
+          nomeia();
+        });
       }
     };
   }
@@ -1013,10 +1820,14 @@
     setupScopeTabs();
     setupGallery();
     setupChatSuggestions();
+    setupChat();
     setupFieldToggles();
     setupMunicipalityOptions();
     setupReveal();
     setupAreaSearch();
+    setupPinPicker();
+    setupConfirmacoes();
+    setupCardCarousels();
   }
 
   if (document.readyState === 'loading') {
@@ -1028,6 +1839,7 @@
   // Os swaps do HTMX trocam listas inteiras: o que entra tem de ser observado.
   document.body.addEventListener('htmx:afterSwap', setupReveal);
   document.body.addEventListener('htmx:afterSettle', setupReveal);
+  document.body.addEventListener('htmx:afterSwap', onChatSwap);
   document.body.addEventListener('htmx:beforeRequest', function (event) {
     setBusy(event, true);
   });

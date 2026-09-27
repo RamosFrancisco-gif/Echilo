@@ -233,15 +233,25 @@
           <h2>Encontra o que procuras</h2>
           <p>Todos estes imóveis passaram por curadoria: fotos confirmadas, pin verificado por satélite e documentação legal validada.</p>
         </div>
-        <a class="section__link" href="{% url 'properties:property_list' %}">
-          Ver todos
-          <svg class="i i--link" aria-hidden="true"><use href="#arrow-right"/></svg>
-        </a>
+        <div class="destaques__acoes">
+          {% comment %}
+            A fotografia muda de minuto em minuto. Quem está a comparar dois
+            imóveis precisa de poder parar isso, e o botão só aparece se o
+            JavaScript o activar: um botão que não faz nada sem JavaScript é
+            pior do que não ter botão nenhum.
+          {% endcomment %}
+          <button class="btn btn--sm" type="button" id="pausa-fotos" hidden
+                  data-alvo-fotos>Pausar fotografias</button>
+          <a class="section__link" href="{% url 'properties:property_list' %}">
+            Ver todos
+            <svg class="i i--link" aria-hidden="true"><use href="#arrow-right"/></svg>
+          </a>
+        </div>
       </div>
 
       <div class="grid-properties">
         {% for property in featured %}
-          {% include "partials/property_card.html" with cover_image=property.images.first %}
+          {% include "partials/property_card.html" with photos=property.images.all %}
         {% endfor %}
       </div>
     </div>
@@ -269,7 +279,7 @@
           <li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Comparação entre até três imóveis</li>
           <li><svg class="i" aria-hidden="true"><use href="#check"/></svg>Disponível 24 horas por dia</li>
         </ul>
-        <a class="btn btn--block mt-20" href="{% url 'assistant:chamt-20">Testar o assistente</a>
+          <a class="btn btn--block mt-20" href="{% url 'assistant:chat' %}">Testar o assistente</a>
       </article>
 
       <article class="level level--human">
@@ -282,7 +292,7 @@
           <li><svg class="i" aria-hidden="true"><use href="#shield"/></svg>Fecho de contrato e documentação legal</li>
           <li><svg class="i" aria-hidden="true"><use href="#alert"/></svg>Reclamações e pedidos de remoção</li>
         </ul>
-        <a class="btn btn--block mt-20" href="{% url 'concierge:owner_intakmt-20">Contactar a equipa</a>
+          <a class="btn btn--block mt-20" href="{% url 'concierge:owner_intake' %}">Contactar a equipa</a>
       </article>
     </div>
   </div>

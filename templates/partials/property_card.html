@@ -1,11 +1,37 @@
 {% comment %}
   Cartão de imóvel reutilizado nas listagens.
-  Contexto: property, url (opcional), cover_image (opcional).
+  Contexto: property, url (opcional), cover_image (opcional), photos (opcional).
+
+  `photos` é o que activa a pilha de fotografias. Sem ele o cartão fica como
+  estava, com uma imagem só: o catálogo lista doze imóveis e a equipa quer
+  comparar, não esperar quarenta segundos para cada cartão mudar. A rotação é
+  para a página inicial, onde a fotografia é metade do argumento do imóvel.
+
+  Quem passa `photos` não passa `cover_image`. A capa vem do próprio `photos`, e
+  `property.images.first` ignorava o `prefetch_related` — o `.first()` corta o
+  queryset e vai à base de dados —, o que punia a home com mais uma consulta
+  por imóvel para descobrir o que a pilha já sabia.
+
+  Só a primeira fotografia leva `src`. As outras ficam em `data-src` e o
+  JavaScript escreve o endereço na altura em que a imagem entra. Seis cartões
+  com quinze fotografias cada são noventa imagens: com `src` nas noventa, a
+  página pede noventa ficheiros a que ninguém olhou ainda, e num 3G em Angola
+  isso é a página a aparecer em branco.
 {% endcomment %}
 {% load echilo_format %}
 <article class="card-property accent-{{ property.tone }}" data-reveal>
-  <div class="card-property__media{% if not cover_image %} card-property__media--empty{% endif %}">
-    {% if cover_image %}
+  <div class="card-property__media{% if not photos and not cover_image %} card-property__media--empty{% endif %}">
+    {% if photos %}
+      <div class="card-property__fotos" data-fotos data-intervalo="40000">
+        {% for foto in photos %}
+          <img class="card-property__foto{% if forloop.first %} is-ativa{% endif %}"
+               {% if forloop.first %}src="{{ foto.image.url }}"{% else %}data-src="{{ foto.image.url }}"{% endif %}
+               alt="{{ property.title }}"
+               {% if not forloop.first %}aria-hidden="true"{% endif %}
+               width="640" height="400" decoding="async">
+        {% endfor %}
+      </div>
+    {% elif cover_image %}
       <img src="{{ cover_image.image.url }}" alt="{{ property.title }}" loading="lazy" width="640" height="400">
     {% else %}
       <svg class="i" aria-hidden="true"><use href="#{% if property.type == 'LAND' %}land{% elif property.type == 'APARTMENT' %}building{% else %}home{% endif %}"/></svg>
