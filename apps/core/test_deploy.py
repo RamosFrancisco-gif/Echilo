@@ -60,12 +60,29 @@ PERGUNTA = (
 
 
 def _python(codigo: str, extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Corre um trecho de Python com o ambiente de produção da Vercel."""
-    ambiente = {**os.environ, **AMBIENTE_VERCEL, **(extra or {})}
+    """Corre um trecho de Python com o ambiente de produção da Vercel.
+
+    A codegenção é fixada dos dois lados, e não por omissão. Com `text=True` sem
+    `encoding`, o subprocesso escreve na codegenção da máquina e o pai lê na
+    codegenção da máquina, e a igualdade só acontece por acidente. Com o
+    `PYTHONIOENCODING` exportado por um CI — ou por quem estiver a ler a saída
+    numa consola acentuada — o filho escreve UTF-8, o pai lê cp1252, e a
+    asserção passa a falhar sem que nada do código tenha mudado. O sintoma é uma
+    mensagem de produção que aparece com `Ã©` no meio dos acentos, o que é
+    exactamente a receita para alguém jurar que o erro é do código testado.
+    """
+    ambiente = {
+        **os.environ,
+        **AMBIENTE_VERCEL,
+        "PYTHONIOENCODING": "utf-8",
+        **(extra or {}),
+    }
     return subprocess.run(  # noqa: S603
         [sys.executable, "-c", codigo],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=RAIZ,
         env=ambiente,
         timeout=180,
