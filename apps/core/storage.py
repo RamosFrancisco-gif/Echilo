@@ -43,7 +43,19 @@ from django.utils.deconstruct import deconstructible
 # 2000 px de lado maior, nenhuma perde píxeis a sério e todas deixam de pesar
 # centenas de kilobytes. `q_auto` e `f_jpg` cumprem o §6: o ficheiro servido nunca
 # é o que o utilizador enviou.
-TRANSFORMACAO_CAPA = "c_limit,w_2000,h_2000,q_auto:good,f_jpg"
+#
+# Isto é um dicionário e não a string `c_limit,w_2000,h_2000,q_auto:good,f_jpg`
+# porque a Cloudinary recusa a string: responde `Unknown transformation c_limit`,
+# e recusa também com barras em vez de vírgulas. Só o dicionário passa. Nenhum
+# teste daqui o apanha, porque o `save()` é mockado e a resposta vem do serviço —
+# a mesma razão pela qual `verify_cloudinary` existe.
+TRANSFORMACAO_CAPA = {
+    "width": 2000,
+    "height": 2000,
+    "crop": "limit",
+    "quality": "auto:good",
+    "fetch_format": "jpg",
+}
 
 FORMATOS_IMAGEM = ("jpg", "jpeg", "png", "webp")
 

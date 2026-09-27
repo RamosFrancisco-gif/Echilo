@@ -185,6 +185,58 @@ class ValidacaoStorageTests(SimpleTestCase):
             CloudinaryDocumentStorage()._verificar_extensao("documento")
 
 
+class TransformacaoDaCapaTests(SimpleTestCase):
+    """A transformação vai como dicionário, e a string é recusada pelo serviço.
+
+    `c_limit,w_2000,h_2000,...` parece a sintaxe documentada e é o que estava
+    escrito. A Cloudinary responde `Unknown transformation c_limit` — e responde
+    o mesmo com barras em vez de vírgulas. Só o dicionário passa, e nenhum teste
+    com o `save()` mockado o descobre: quem responde é o serviço.
+    """
+
+    def test_a_transformacao_nao_e_uma_string(self) -> None:
+        self.assertIsInstance(
+            TRANSFORMACAO_CAPA,
+            dict,
+            "a Cloudinary recusa a transformação em string; tem de ser um dicionário",
+        )
+
+    def test_a_transformacao_nao_amplia_acima_do_tecto(self) -> None:
+        """`limit` só reduz. `fill` esticaria uma fotografia pequena para 2000 px."""
+        self.assertEqual(TRANSFORMACAO_CAPA["crop"], "limit")
+        self.assertEqual(TRANSFORMACAO_CAPA["width"], 2000)
+        self.assertEqual(TRANSFORMACAO_CAPA["height"], 2000)
+
+    def test_a_transformacao_re_codifica_como_o_secao_exige(self) -> None:
+        """§6: o ficheiro servido nunca é o que o utilizador enviou."""
+        self.assertEqual(TRANSFORMACAO_CAPA["fetch_format"], "jpg")
+        self.assertTrue(str(TRANSFORMACAO_CAPA["quality"]).startswith("auto"))
+
+
+class VerifyCloudinaryTests(SimpleTestCase):
+    """O comando de verificação recusa-se a correr sem credencial, sem ir à rede."""
+
+    def test_sem_credencial_o_comando_explica_o_que_falta(self) -> None:
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        with (
+            override_settings(CLOUDINARY_URL=""),
+            self.assertRaisesMessage(CommandError, "api secret"),
+        ):
+            call_command("verify_cloudinary", stdout=None, stderr=None)
+
+    def test_a_url_incompleta_e_o_mesmo_que_nada(self) -> None:
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        with (
+            override_settings(CLOUDINARY_URL="cloudinary://so-a-chave@echiloteste"),
+            self.assertRaisesMessage(CommandError, "api secret"),
+        ):
+            call_command("verify_cloudinary", stdout=None, stderr=None)
+
+
 class SubmoduloDaCloudinaryTests(SimpleTestCase):
     """O `uploader` tem de estar importado, e ninguém o descobre sem enviar.
 
