@@ -23,7 +23,14 @@ import uuid
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+# O `uploader` é importado à mão e não por efeito colateral. `import cloudinary`
+# traz `config` e deixa `uploader` e `utils` de fora, e o `save()` chama
+# `cloudinary.uploader.upload`: sem esta linha o erro só nasce no primeiro envio
+# de produção, como `AttributeError: module 'cloudinary' has no attribute
+# 'uploader'`, e um import que parece redundante é precisamente o que um
+# clean-up apaga. `apps.core.test_storage` fixa o contrato.
 import cloudinary
+import cloudinary.uploader
 import cloudinary.utils
 from cloudinary.exceptions import Error as CloudinaryError
 from django.conf import settings

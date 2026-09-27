@@ -9,10 +9,13 @@ papéis trocados.
 
 from __future__ import annotations
 
+import importlib
 from unittest import mock
 
+from cloudinary.exceptions import Error as CloudinaryError
 from django.contrib import admin
 from django.core.exceptions import SuspiciousFileOperation
+from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
@@ -20,8 +23,10 @@ from django.urls import reverse
 from apps.accounts.models import User
 from apps.properties.admin import DocumentAccessLogAdmin
 from apps.core.storage import (
+    TRANSFORMACAO_CAPA,
     CloudinaryDocumentStorage,
     CloudinaryImageStorage,
+    CloudinaryNaoConfigurada,
     cloudinary_configurado,
     storage_documentacao,
 )
@@ -178,6 +183,92 @@ class ValidacaoStorageTests(SimpleTestCase):
         """Sem extensão não há como saber o que é, e adivinhar é o que o §6 proíbe."""
         with self.assertRaises(SuspiciousFileOperation):
             CloudinaryDocumentStorage()._verificar_extensao("documento")
+
+
+class SubmoduloDaCloudinaryTests(SimpleTestCase):
+    """O `uploader` tem de estar importado, e ninguém o descobre sem enviar.
+
+    Nenhum teste da suite chegava ao `save()`: em desenvolvimento o backend é o
+    do disco, e o caminho da nuvem só corre com `CLOUDINARY_PUBLICAO` ligado. O
+    primeiro envio de produção foi o primeiro envio de sempre, e o que apareceu
+    foi `AttributeError: module 'cloudinary' has no attribute 'uploader'` — o
+    pacote não importa o submódulo por si. Um teste que só confirme o backend
+    configurado passava com o `uploader` por importar.
+    """
+
+    def test_o_submodulo_do_envio_esta_importado(self) -> None:
+        modulo = importlib.import_module("apps.core.storage")
+        uploader = getattr(modulo.cloudinary, "uploader", None)
+        self.assertIsNotNone(
+            uploader,
+            "import cloudinary não traz cloudinary.uploader: o save() chama "
+            "cloudinary.uploader.upload e o import tem de ser explícito.",
+        )
+        for nome in ("upload", "destroy"):
+            with self.subTest(nome=nome):
+                self.assertTrue(
+                    hasattr(uploader, nome),
+                    f"cloudinary.uploader não tem `{nome}` na versão instalada.",
+                )
+
+
+@APENAS_NUVEM
+class EnvioParaACloudinaryTests(SimpleTestCase):
+    """O `save()` é o caminho que falhou em produção, e escreve-se aqui."""
+
+    def test_o_save_devolve_o_public_id_e_manda_a_pasta_e_a_transformacao(self) -> None:
+        with mock.patch("apps.core.storage.cloudinary.uploader.upload") as envio:
+            envio.return_value = {"public_id": "opaco123"}
+            nome = CloudinaryImageStorage().save(
+                "casa.jpg", ContentFile(b"bytes-de-uma-fotografia")
+            )
+
+        self.assertEqual(nome, "opaco123")
+        opcoes = envio.call_args.kwargs
+        self.assertEqual(opcoes["folder"], "echilo/imoveis")
+        self.assertEqual(opcoes["transformation"], TRANSFORMACAO_CAPA)
+        self.assertEqual(opcoes["overwrite"], False)
+        self.assertEqual(sorted(opcoes["allowed_formats"]), ["jpeg", "jpg", "png", "webp"])
+
+    def test_o_nome_enviado_nao_e_o_nome_que_a_pessoa_escolheu(self) -> None:
+        """O §6 não publica o nome do ficheiro de ninguém."""
+        with mock.patch("apps.core.storage.cloudinary.uploader.upload") as envio:
+            envio.return_value = {"public_id": "opaco123"}
+            CloudinaryImageStorage().save(
+                "escritura-da-maria-dos-santos.jpg", ContentFile(b"bytes")
+            )
+
+        enviado = envio.call_args.kwargs["public_id"]
+        self.assertNotIn("maria", enviado)
+        self.assertEqual(len(enviado), 32)
+
+    def test_a_recusa_da_nuvem_vira_o_erro_do_projecto(self) -> None:
+        """A excepção de dentro do pacote não diz o que a equipa deve fazer."""
+        with mock.patch("apps.core.storage.cloudinary.uploader.upload") as envio:
+            envio.side_effect = CloudinaryError("credencial recusada")
+            with self.assertRaises(CloudinaryNaoConfigurada) as contexto:
+                CloudinaryImageStorage().save("casa.jpg", ContentFile(b"bytes"))
+
+        self.assertIn("recusou o envio", str(contexto.exception))
+
+    def test_o_documento_vai_autenticado_e_nunca_com_url_publica(self) -> None:
+        with mock.patch("apps.core.storage.cloudinary.uploader.upload") as envio:
+            envio.return_value = {"public_id": "escritura1"}
+            CloudinaryDocumentStorage().save("escritura.pdf", ContentFile(b"bytes"))
+
+        opcoes = envio.call_args.kwargs
+        self.assertEqual(opcoes["type"], "authenticated")
+        self.assertEqual(opcoes["resource_type"], "raw")
+        self.assertEqual(opcoes["folder"], "echilo/documentos")
+
+    def test_apagar_uma_fotografia_chama_o_destroy(self) -> None:
+        """Numa conta paga, lixo custa dinheiro todos os meses."""
+        with mock.patch("apps.core.storage.cloudinary.uploader.destroy") as destroy:
+            CloudinaryImageStorage().delete("opaco123")
+
+        destroy.assert_called_once_with(
+            "opaco123", resource_type="image", type="upload"
+        )
 
 
 @APENAS_NUVEM
