@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,6 +137,83 @@ class GuardioesProducaoTests(SimpleTestCase):
         """
         resultado = _python("import django; django.setup()", {"CLOUDINARY_URL": ""})
         self.assertIn("efémero", resultado.stderr)
+
+
+class VariaveisEmBrancoTests(SimpleTestCase):
+    """Uma variável em branco no painel é o caso comum, e não uma excepção.
+
+    O `.env.example` traz as variáveis todas com o valor vazio, e copiá-lo para o
+    painel da Vercel é o caminho normal. Um `int(env("X", "5"))` não distingue
+    "não configurada" de "configurada com o valor 5": recebe a string vazia e
+    levanta `ValueError` — no meio do import das settings, que é um sítio onde
+    o erro não parece com o que é. A primeira vez que isto apareceu, o build da
+    Vercel morreu em `EMAIL_PORT=''` e a mensagem falava de um inteiro, três
+    ficheiros e quatro minutos de build mais abaixo da causa.
+    """
+
+    # As numéricas e as booleanas, que é onde um branco não tem leitura possível.
+    # `DJANGO_SECRET_KEY`, `ALLOWED_HOSTS` e `CLOUDINARY_URL` ficam de fora de
+    # propósito: em branco continuam a ser erro, e é o que os guardiões acima
+    # verificam.
+    NUMERICAS = (
+        "CLOUDINARY_PUBLICAO",
+        "DATA_UPLOAD_MAX_MEMORY_SIZE",
+        "DJANGO_CACHE_BD",
+        "DJANGO_CACHE_TIMEOUT",
+        "DJANGO_CONN_MAX_AGE",
+        "DJANGO_DB_SSL_VERIFICAR_HOST",
+        "DJANGO_DB_TIMEOUT",
+        "DJANGO_DEBUG",
+        "DJANGO_SECURE_SSL_REDIRECT",
+        "ECHILO_AI_MAX_RETRIES",
+        "ECHILO_AI_TIMEOUT",
+        "ECHILO_MAP_CENTER_LAT",
+        "ECHILO_MAP_CENTER_LON",
+        "ECHILO_MAP_DEFAULT_ZOOM",
+        "ECHILO_MAP_INVERT_TILES",
+        "EMAIL_PORT",
+        "EMAIL_TIMEOUT",
+        "EMAIL_USE_TLS",
+        "FILE_UPLOAD_MAX_MEMORY_SIZE",
+    )
+
+    def test_branco_em_toda_a_variavel_numerica_ainda_da_o_omissao(self) -> None:
+        """Todas em branco de uma vez, e a produção arranca com os omissões.
+
+        Todas de uma vez porque é assim que o painel fica: alguém copia o
+        `.env.example`, preenche o que sabe e deixa o resto vazio. Testar uma de
+        cada vez deixaria passar a próxima a ser acrescentada.
+        """
+        resultado = _python(
+            "import django; django.setup();"
+            "from django.conf import settings as s;"
+            "print(s.EMAIL_PORT, s.EMAIL_TIMEOUT, s.ECHILO_AI_TIMEOUT,"
+            " s.ECHILO_MAP_DEFAULT_ZOOM, s.DATABASES['default']['CONN_MAX_AGE'],"
+            " s.CACHES['default']['OPTIONS']['TIMEOUT'])",
+            {nome: "" for nome in self.NUMERICAS},
+        )
+
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertEqual(resultado.stdout.strip().splitlines()[-1], "587 10 6.0 12 0 300")
+
+    def test_nenhuma_variavel_numerica_e_convertida_a_mao(self) -> None:
+        """Nenhuma setting converte o valor lido com `int()` ou `float()`.
+
+        O         `env()` devolve a string que está no ambiente, e `env()` com omissão
+        só devolve o omissão quando a variável não existe — não quando existe
+        vazia. Por isso a conversão tem de ser o `env_int`/`env_number`, que
+        sabe a diferença. Este teste apanha a próxima variável acrescentada com a
+        conversão à mão, que a lista de cima não conhece.
+        """
+        padroes = re.compile(r"\b(?:int|float)\(\s*env\(")
+        for ficheiro in sorted((RAIZ / "config" / "settings").glob("*.py")):
+            for numero, linha in enumerate(
+                ficheiro.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                self.assertIsNone(
+                    padroes.search(linha),
+                    f"{ficheiro.name}:{numero} converte à mão: {linha.strip()}",
+                )
 
 
 class LimitesDaPlataformaTests(SimpleTestCase):

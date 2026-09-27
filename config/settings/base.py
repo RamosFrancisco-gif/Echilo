@@ -18,9 +18,16 @@ def env(key: str, default: str = "") -> str:
 
 
 def env_bool(key: str, default: bool = False) -> bool:
-    """Interpreta uma variável de ambiente como booleano."""
+    """Interpreta uma variável de ambiente como booleano.
+
+    Uma variável em branco cai no omissão, como no `env_number`. O contrário
+    dava `False` a uma variável que ninguém tinha posto a `False`: um
+    `EMAIL_USE_TLS=` no painel desligava o TLS do SMTP em silêncio, e um
+    `CLOUDINARY_PUBLICAO=` fazia a produção recusar arrancar sem dizer que
+    ninguém tinha ligado o interruptor.
+    """
     raw = os.environ.get(key)
-    if raw is None:
+    if raw is None or not raw.strip():
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -260,11 +267,11 @@ X_FRAME_OPTIONS = "DENY"
 
 EMAIL_BACKEND = env("DJANGO_EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = env("EMAIL_HOST", "smtp.gmail.com")
-EMAIL_PORT = int(env("EMAIL_PORT", "587"))
+EMAIL_PORT = env_int("EMAIL_PORT", 587)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
-EMAIL_TIMEOUT = int(env("EMAIL_TIMEOUT", "10"))
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 # Sem remetente explícito, o SMTP só aceita a conta autenticada (limite do Gmail).
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL") or f"Echilo <{EMAIL_HOST_USER}>"
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
