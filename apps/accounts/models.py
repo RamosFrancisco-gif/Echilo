@@ -10,6 +10,11 @@ from django.dispatch import receiver
 from apps.core.validators import validate_adult, validate_angolan_phone, validate_nif
 from apps.properties.reference import ANGOLA_PROVINCES
 
+# Largura do retrato no cabeçalho, com folga para ecrãs de densidade alta. Vive
+# aqui e não no template porque o mesmo número decide a versão pedida à storage
+# e o que o teste mede; nos dois sítios, uma das medidas fica errada sem erro.
+AVATAR_LARGURA_PX = 96
+
 
 class User(AbstractUser):
     """Cliente ou membro da equipa, distinguido pelo campo `role`."""
@@ -93,6 +98,12 @@ class User(AbstractUser):
         default=Role.CLIENT,
         db_index=True,
     )
+    photo = models.ImageField(
+        "fotografia de perfil",
+        upload_to="perfis/%Y/%m/",
+        null=True,
+        blank=True,
+    )
     is_team_member = models.BooleanField("membro da equipa", default=False, editable=False)
     created_at = models.DateTimeField("criado em", auto_now_add=True)
 
@@ -124,13 +135,34 @@ class User(AbstractUser):
 
     @property
     def initials(self) -> str:
-        """Devolve as iniciais usadas no avatar da interface."""
+        """Devolve as iniciais usadas no avatar da interface.
+
+        É o que fica no cabeçalho enquanto não há fotografia. Um avatar com
+        as iniciais não é uma falha: é a identidade de quem entrou, e só a
+        fotografia a refine. Quando há foto, é a foto que o browser pede.
+        """
         parts = [part for part in self.full_name.split() if part]
         if not parts:
             return "EC"
         if len(parts) == 1:
             return parts[0][:2].upper()
         return f"{parts[0][0]}{parts[-1][0]}".upper()
+
+    @property
+    def avatar_url(self) -> str:
+        """Endereço do retrato, ou string vazia quando não há fotografia.
+
+        O cabeçalho pede este endereço em todas as páginas, e um retrato mostrado
+        a 28 px não deve pesar como a capa de um imóvel. A storage sabe
+        derivar uma versão estreita sem novo ficheiro; quando é um disco local
+        não sabe, e o endereço é o do ficheiro inteiro.
+        """
+        if not self.photo:
+            return ""
+        derivada = getattr(self.photo.storage, "url_derivada", None)
+        if derivada is None:
+            return self.photo.url
+        return derivada(self.photo.name, largura=AVATAR_LARGURA_PX)
 
     @property
     def can_curate(self) -> bool:
@@ -141,6 +173,16 @@ class User(AbstractUser):
     def can_validate(self) -> bool:
         """Diz se o utilizador pode validar documentos e aprovar publicação."""
         return self.role in {self.Role.AGENT, self.Role.ADMIN}
+
+    @property
+    def can_manage_users(self) -> bool:
+        """Diz se o utilizador pode criar contas de equipa e de clientes.
+
+        Só o administrador. Um curador que registe outro curador é uma segunda
+        chefia sem ninguém a nomear, e o menu tem de dizer quem cria contas — não
+        pode ser "todos os que estão na equipa".
+        """
+        return self.role == self.Role.ADMIN
 
 
 @receiver(post_save, sender=User)

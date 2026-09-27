@@ -1,0 +1,16 @@
+{% comment %}
+  Avatar da conta: a fotografia quando existe, as iniciais quando não.
+
+  É um `partial` e não um `{% if %}` porque há dois sítios que mostram quem está
+  com a sessão — o cabeçalho e a página do perfil — e duas escritas da mesma
+  decisão divergem: o cabeçalho passa a mostrar a fotografia e o perfil continua a
+  mostrar as iniciais, e ninguém sabe qual dos dois está a mentir.
+
+  A imagem é decorativa (`alt=""`): quem está a vê-la tem o nome do lado, e
+  "Fotografia de Ana Maria dos Santos" lido em voz alta antes do link é repetição.
+{% endcomment %}
+{% if user.avatar_url %}
+  <img class="{{ css_class }}" src="{{ user.avatar_url }}" alt="" width="{{ size|default:28 }}" height="{{ size|default:28 }}" loading="lazy" decoding="async">
+{% else %}
+  <span class="{{ css_class }}" aria-hidden="true">{{ user.initials }}</span>
+{% endif %}

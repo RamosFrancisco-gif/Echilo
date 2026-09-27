@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Clientes - contas{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <div class="section__head" data-reveal>
+      <div>
+        <span class="eyebrow">Administração</span>
+        <h2>Clientes</h2>
+        <p>{{ total }} cliente(s) com conta. Procura por nome, e-mail, NIF ou telefone.</p>
+      </div>
+      <a class="btn btn--primary" href="{% url 'accounts:client_create' %}">Cadastrar cliente</a>
+    </div>
+
+    <form class="search-row mb-18" method="get" role="search">
+      <div class="field">
+        <label class="label" for="id_procura">Procurar cliente</label>
+        <input class="field-control" type="search" name="q" id="id_procura"
+               value="{{ procura }}" placeholder="Ana, 009671373HA093, +244 923…">
+      </div>
+      <button class="btn btn--primary" type="submit">Procurar</button>
+      {% if procura %}
+        <a class="btn" href="{% url 'accounts:client_list' %}">Limpar</a>
+      {% endif %}
+    </form>
+
+    {% if clientes %}
+      <ul class="table-list" role="list">
+        {% for cliente in clientes %}
+          <li class="table-list__row">
+            <div>
+              <span class="table-list__title">{{ cliente.full_name }}</span>
+              <p class="text-muted t-sm">
+                {{ cliente.email }}{% if cliente.phone %} · {{ cliente.phone }}{% endif %}
+              </p>
+            </div>
+            <div class="table-list__meta">
+              {% if cliente.nif %}<span class="badge badge--muted">{{ cliente.nif }}</span>{% endif %}
+              {% if cliente.province %}
+                <span class="text-muted-2 t-xs">{{ cliente.get_province_display }}</span>
+              {% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+
+      {% if is_paginated %}
+        <nav class="pagination" aria-label="Paginação dos clientes">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--sm" href="?q={{ procura|urlencode }}&amp;page={{ page_obj.previous_page_number }}">Anterior</a>
+          {% endif %}
+          <span class="text-muted t-sm">Página {{ page_obj.number }} de {{ paginator.num_pages }}</span>
+          {% if page_obj.has_next %}
+            <a class="btn btn--sm" href="?q={{ procura|urlencode }}&amp;page={{ page_obj.next_page_number }}">Seguinte</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        <h3>{% if procura %}Nenhum cliente corresponde{% else %}Ainda não há clientes{% endif %}</h3>
+        <p>
+          {% if procura %}
+            Tente outro nome, e-mail ou NIF.
+          {% else %}
+            As contas públicas aparecem aqui assim que alguém se regista.
+          {% endif %}
+        </p>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

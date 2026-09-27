@@ -22,6 +22,18 @@ def require_team_member(request: HttpRequest) -> None:
         raise PermissionDenied("Esta área é reservada à equipa Echilo.")
 
 
+def require_admin(request: HttpRequest) -> None:
+    """Restringe a gestão de contas ao administrador (§3).
+
+    A regra está em `User.can_manage_users`, como as outras. Escrever `role ==
+    "ADMIN"` aqui daria um segundo sítio a responder à pergunta "quem cria
+    contas", e a divergência entre os dois não daria erro: apareceria a entrada
+    no menu a quem não devia, e a página continuaria a responder 403.
+    """
+    if not getattr(request.user, "can_manage_users", False):
+        raise PermissionDenied("Só a administração pode gerir contas.")
+
+
 def require_document_access(request: HttpRequest) -> None:
     """Restringe a documentação legal a quem pode validar, conforme §6.
 

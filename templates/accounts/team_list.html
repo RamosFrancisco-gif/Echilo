@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Equipa - contas{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <div class="section__head" data-reveal>
+      <div>
+        <span class="eyebrow">Administração</span>
+        <h2>Membros da equipa</h2>
+        <p>Quem tem acesso ao Echilo por dentro. O perfil decide o que a pessoa vê no menu.</p>
+      </div>
+      <a class="btn btn--primary" href="{% url 'accounts:team_member_create' %}">Cadastrar membro</a>
+    </div>
+
+    {% if membros %}
+      <ul class="table-list" role="list">
+        {% for membro in membros %}
+          <li class="table-list__row">
+            <div>
+              <span class="eyebrow">{{ membro.get_role_display }}</span>
+              <span class="table-list__title">{{ membro.full_name }}</span>
+              <p class="text-muted t-sm">{{ membro.email }}</p>
+            </div>
+            <div class="table-list__meta">
+              {% if membro.is_staff %}<span class="badge badge--ok">Painel</span>{% endif %}
+              {% if membro.last_login %}
+                <span class="text-muted-2 t-xs">Entrou {{ membro.last_login|timesince }} atrás</span>
+              {% else %}
+                <span class="text-muted-2 t-xs">Ainda não entrou</span>
+              {% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+
+      {% if is_paginated %}
+        <nav class="pagination" aria-label="Paginação da equipa">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--sm" href="?page={{ page_obj.previous_page_number }}">Anterior</a>
+          {% endif %}
+          <span class="text-muted t-sm">Página {{ page_obj.number }} de {{ paginator.num_pages }}</span>
+          {% if page_obj.has_next %}
+            <a class="btn btn--sm" href="?page={{ page_obj.next_page_number }}">Seguinte</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        <h3>Sem membros de equipa</h3>
+        <p>Cadastre o primeiro curador, agente ou administrador.</p>
+      </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

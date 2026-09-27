@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Cadastrar cliente - contas{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--narrow">
+    <a class="auth__back" href="{% url 'accounts:client_list' %}">
+      <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+      Voltar aos clientes
+    </a>
+
+    <div class="section__head mt-16" data-reveal>
+      <div>
+        <span class="eyebrow">Administração</span>
+        <h2>{{ view_title }}</h2>
+        <p>{{ view_subtitle }}</p>
+      </div>
+    </div>
+
+    <div class="sidebar-card mt-18">
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert--error" role="alert">
+            <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+            <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+          </div>
+        {% endif %}
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Identificação</legend>
+
+          {% include "partials/form_field.html" with field=form.full_name %}
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.date_of_birth %}
+            {% include "partials/form_field.html" with field=form.nif %}
+          </div>
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.id_document_type %}
+            {% include "partials/form_field.html" with field=form.id_document_number %}
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Contacto</legend>
+
+          {% include "partials/form_field.html" with field=form.email %}
+          {% include "partials/form_field.html" with field=form.phone %}
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.province %}
+            {% include "partials/form_field.html" with field=form.gender %}
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Segurança</legend>
+
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.password %}
+            {% include "partials/form_field.html" with field=form.password_confirm %}
+          </div>
+          <p class="field__help">
+            A conta fica com perfil de cliente: navega, pede visita e envia
+            proposta. Não dá acesso à curadoria nem ao painel.
+          </p>
+        </fieldset>
+
+        <button class="btn btn--primary btn--block" type="submit">Cadastrar cliente</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

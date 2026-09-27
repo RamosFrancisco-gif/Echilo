@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}O seu perfil - conta{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap">
+    <div class="section__head" data-reveal>
+      <div>
+        <span class="eyebrow">Conta</span>
+        <h2>{{ view_title }}</h2>
+        <p>
+          Tudo o que a equipa usa para o reconhecer e para o contactar, e a
+          palavra-passe com que entra. O que mudar aqui passa a valer a partir
+          de agora.
+        </p>
+      </div>
+    </div>
+
+    <div class="settings">
+      {% comment %}
+        A coluna da esquerda é um resumo, não um formulário. Repeitar aqui o e-mail
+        e o telefone como texto fixo daria à pessoa dois sítios com o mesmo dado, um
+        a editar e outro a mostrar, e o que estivesse errado no segundo era o que
+        estava certo.
+
+        Os dados, a identificação e a fotografia vivem no **mesmo** formulário, com
+        um botão só. São três perguntas sobre a mesma conta: dividi-las em três
+        pedidos tornaria os campos dos outros dois obrigatórios em cada um deles,
+        e um erro de validação passaria a ser "este campo é obrigatório" num
+        formulário onde a pessoa não o preencheu.
+      {% endcomment %}
+      <aside class="settings__aside">
+        <div class="profile-card">
+          {% include "partials/avatar.html" with user=request.user css_class="profile-card__avatar" size=72 %}
+
+          <p class="profile-card__name">{{ request.user.full_name }}</p>
+          <p class="profile-card__role">{{ resumo.perfil }}</p>
+
+          <dl class="profile-card__facts">
+            <div>
+              <dt>E-mail</dt>
+              <dd>{{ resumo.email }}</dd>
+            </div>
+            <div>
+              <dt>Telefone</dt>
+              <dd>{{ resumo.telefone }}</dd>
+            </div>
+            <div>
+              <dt>NIF</dt>
+              <dd>{{ resumo.nif }}</dd>
+            </div>
+            <div>
+              <dt>Conta criada em</dt>
+              <dd>{{ resumo.entrou|date:"j/m/Y" }}</dd>
+            </div>
+          </dl>
+        </div>
+
+        <p class="settings__aside-note">
+          O perfil de acesso não se muda aqui. A promoção é feita no painel
+          interno, por alguém que a nomeia.
+        </p>
+      </aside>
+
+      <div class="settings__main">
+        <form class="settings-form" method="post" enctype="multipart/form-data" novalidate>
+          {% csrf_token %}
+
+          {% if form.non_field_errors %}
+            <div class="alert alert--error" role="alert">
+              <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+              <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+            </div>
+          {% endif %}
+
+          <section class="settings-card">
+            <div class="settings-card__head">
+              <h3 class="settings-card__title">Os seus dados</h3>
+              <p class="settings-card__hint">
+                Como a equipa lhe escreve e como a equipa lhe telefona.
+              </p>
+            </div>
+
+            <div class="settings-grid">
+              {% include "partials/form_field.html" with field=form.full_name %}
+              {% include "partials/form_field.html" with field=form.email %}
+              {% include "partials/form_field.html" with field=form.phone %}
+              {% include "partials/form_field.html" with field=form.province %}
+              {% include "partials/form_field.html" with field=form.gender %}
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card__head">
+              <h3 class="settings-card__title">Identificação</h3>
+              <p class="settings-card__hint">
+                É o que a equipa confirma antes de tratar de um pedido. Um NIF
+                corrigido deixa de bater certo com o que a equipa já viu, por isso
+                avise-a.
+              </p>
+            </div>
+
+            <div class="settings-grid">
+              {% include "partials/form_field.html" with field=form.nif %}
+              {% include "partials/form_field.html" with field=form.date_of_birth %}
+              {% include "partials/form_field.html" with field=form.id_document_type %}
+              {% include "partials/form_field.html" with field=form.id_document_number %}
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card__head">
+              <h3 class="settings-card__title">Fotografia</h3>
+              <p class="settings-card__hint">
+                Aparece no lugar das iniciais, no canto do ecrã, em todas as páginas.
+              </p>
+            </div>
+
+            <div class="settings-photo">
+              {% include "partials/avatar.html" with user=request.user css_class="settings-photo__preview" size=72 %}
+              <div class="settings-photo__fields">
+                {% include "partials/form_field.html" with field=form.photo %}
+
+                {% if request.user.photo %}
+                  {% include "partials/form_field.html" with field=form.remover_foto %}
+                {% else %}
+                  {% comment %}
+                    A caixa de remover só aparece havendo fotografia. Marcada sem foto
+                    nenhuma, ela diz "remover" e não acontece nada, e a pessoa conclui
+                    que o botão não funciona.
+                  {% endcomment %}
+                  <input type="hidden" name="remover_foto" value="">
+                {% endif %}
+              </div>
+            </div>
+          </section>
+
+          <div class="settings-actions">
+            <button class="btn btn--primary btn--lg" type="submit">Guardar alterações</button>
+          </div>
+        </form>
+
+        <form
+          class="settings-card settings-card--senha{% if formulario == 'senha' %} is-recusado{% endif %}"
+          method="post"
+          novalidate
+        >
+          {% csrf_token %}
+
+          <div class="settings-card__head">
+            <h3 class="settings-card__title">Palavra-passe</h3>
+            <p class="settings-card__hint">
+              Precisa da que está a usar agora. Trocar a palavra-passe não termina
+              esta sessão; as outras sessões abertas continuam activas.
+            </p>
+          </div>
+
+          {% if senha_form.non_field_errors %}
+            <div class="alert alert--error" role="alert">
+              <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+              <span>{% for error in senha_form.non_field_errors %}{{ error }}{% endfor %}</span>
+            </div>
+          {% endif %}
+
+          <div class="settings-grid">
+            {% include "partials/form_field.html" with field=senha_form.old_password %}
+            {% include "partials/form_field.html" with field=senha_form.new_password1 %}
+            {% include "partials/form_field.html" with field=senha_form.new_password2 %}
+          </div>
+
+          <div class="settings-actions">
+            <button class="btn btn--primary" type="submit" name="alterar_senha" value="1">
+              Alterar palavra-passe
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

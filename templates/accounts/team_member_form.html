@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Cadastrar membro da equipa - contas{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="wrap wrap--narrow">
+    <a class="auth__back" href="{% url 'accounts:team_list' %}">
+      <svg class="i" aria-hidden="true"><use href="#home"/></svg>
+      Voltar à equipa
+    </a>
+
+    <div class="section__head mt-16" data-reveal>
+      <div>
+        <span class="eyebrow">Administração</span>
+        <h2>{{ view_title }}</h2>
+        <p>{{ view_subtitle }}</p>
+      </div>
+    </div>
+
+    <div class="sidebar-card mt-18">
+      <form method="post" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert--error" role="alert">
+            <svg class="i" aria-hidden="true"><use href="#alert"/></svg>
+            <span>{% for error in form.non_field_errors %}{{ error }}{% endfor %}</span>
+          </div>
+        {% endif %}
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Identificação</legend>
+
+          {% include "partials/form_field.html" with field=form.full_name %}
+          {% include "partials/form_field.html" with field=form.email %}
+          {% include "partials/form_field.html" with field=form.phone %}
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Perfil de acesso</legend>
+
+          {% include "partials/form_field.html" with field=form.role %}
+
+          <div class="role-help">
+            <p><b>Curador</b> — regista imóveis, carrega fotografias e acompanha a triagem.</p>
+            <p><b>Agente</b> — tudo o que o curador faz, mais validar documentos e confirmar visitas.</p>
+            <p><b>Administrador</b> — tudo o que o agente faz, mais gerir contas e permissões.</p>
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend class="fieldset__legend">Segurança</legend>
+
+          <div class="grid-2">
+            {% include "partials/form_field.html" with field=form.password %}
+            {% include "partials/form_field.html" with field=form.password_confirm %}
+          </div>
+          <p class="field__help">
+            A palavra-passe é a que a pessoa vai usar para entrar. Diga-lha em
+            privado: o e-mail de boas-vindas ainda não existe.
+          </p>
+        </fieldset>
+
+        <button class="btn btn--primary btn--block" type="submit">Cadastrar membro</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}
