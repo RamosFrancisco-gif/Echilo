@@ -1,0 +1,22 @@
+{% comment %}
+  Paginação das listagens, numa caixa só.
+
+  Recebe `page_obj`, `consulta_lista` — os parâmetros que a página seguinte tem de
+  levar consigo — e `rotulo`, o que o leitor de ecrã lê. Havia quatro redações
+  desta caixa com duas marcas diferentes: o catálogo escrevia só o número, as
+  páginas internas escreviam "Página X de Y" e pousavam `btn btn--sm` por cima
+  dos links que o CSS já desenha sozinho. A redacção que fica a trinta do limite
+  é sempre a que ninguém actualiza, e a próxima listagem nasce com a errada.
+{% endcomment %}
+{% if page_obj.paginator.num_pages > 1 %}
+  <nav class="pagination" aria-label="{{ rotulo }}">
+    {% if page_obj.has_previous %}
+      <a href="?{% for chave, valor in consulta_lista.items %}{{ chave }}={{ valor|urlencode }}&amp;{% endfor %}page={{ page_obj.previous_page_number }}" rel="prev">Anterior</a>
+    {% endif %}
+    <span class="is-current">{{ page_obj.number }}</span>
+    <span class="text-muted t-sm">de {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}
+      <a href="?{% for chave, valor in consulta_lista.items %}{{ chave }}={{ valor|urlencode }}&amp;{% endfor %}page={{ page_obj.next_page_number }}" rel="next">Seguinte</a>
+    {% endif %}
+  </nav>
+{% endif %}

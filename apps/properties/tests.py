@@ -25,6 +25,7 @@ from django.urls import reverse
 from django.utils.datastructures import MultiValueDict
 
 from apps.core.geo import haversine_metres
+from apps.core.pagination import PAGINA_PADRAO
 from apps.core.templatetags.echilo_format import coordinate
 from apps.core.testing import (
     ids_dentro_de,
@@ -2621,7 +2622,11 @@ class PropertyAreaViewTests(TestCase):
 
         response = self.client.get(reverse("properties:property_list"), self.area_query)
 
-        self.assertEqual(response.context["page_obj"].paginator.num_pages, 2)
+        # 13 imóveis a 6 por página dão três páginas. O número é o do tamanho
+        # partilhado, e escrevê-lo aqui de novo era o que fazia este teste
+        # passar com 12 e falhar quando a página encolheu.
+        self.assertEqual(response.context["page_obj"].paginator.num_pages, 3)
+        self.assertEqual(response.context["page_obj"].paginator.per_page, PAGINA_PADRAO)
         self.assertContains(response, "radius_m=2000")
         self.assertContains(response, "center_lat=-8.918430")
 
@@ -3390,3 +3395,117 @@ class AdminBoundarySimplificationTests(SimpleTestCase):
 
     def test_um_nome_composto_tambem_tem_a_forma_curta(self) -> None:
         self.assertIn("Dembos", variantes("Dembos-Quibaxe"))
+
+
+class CuratorDashboardPaginationTests(TestCase):
+    """O índice da equipa pagina de seis em seis e não larga o filtro pelo caminho."""
+
+    def setUp(self) -> None:
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.url = reverse("properties:curator_dashboard")
+        self.client.force_login(self.curator)
+
+    def _imoveis(self, quantos: int, status: str) -> list[Property]:
+        return [
+            make_property(
+                curator=self.curator,
+                owner=self.owner,
+                status=status,
+                title=f"Imóvel {indice:02d}",
+            )
+            for indice in range(quantos)
+        ]
+
+    def test_o_indice_mostra_seis_de_seis(self) -> None:
+        """Sete imóveis em validação dão uma página de seis e uma de uma."""
+        self._imoveis(PAGINA_PADRAO + 1, Property.Status.UNDER_VALIDATION)
+
+        primeira = self.client.get(self.url)
+        segunda = self.client.get(self.url, {"page": 2})
+
+        self.assertEqual(len(primeira.context["properties"]), PAGINA_PADRAO)
+        self.assertEqual(len(segunda.context["properties"]), 1)
+        self.assertEqual(primeira.context["page_obj"].paginator.num_pages, 2)
+
+    def test_o_indice_guarda_o_filtro_de_estado(self) -> None:
+        """A página seguinte continua a mostrar o estado escolhido.
+
+        O link escrevia o estado à mão no HTML. Passar a vir de um dicionário
+        escrito pela view é o que garante que o link e o filtro não podem divergir
+        depois de alguém escrever a palavra `estado` duas vezes.
+        """
+        self._imoveis(PAGINA_PADRAO + 1, Property.Status.UNDER_VALIDATION)
+        self._imoveis(3, Property.Status.DRAFT)
+
+        resposta = self.client.get(self.url, {"estado": Property.Status.UNDER_VALIDATION})
+
+        self.assertEqual(
+            resposta.context["estado_activo"], Property.Status.UNDER_VALIDATION
+        )
+        self.assertEqual(resposta.context["estado_consulta"], {"estado": "UNDER_VALIDATION"})
+        self.assertEqual(len(resposta.context["properties"]), PAGINA_PADRAO)
+        self.assertContains(resposta, "estado=UNDER_VALIDATION")
+        self.assertContains(resposta, "page=2")
+
+    def test_o_indice_sem_filtro_nao_deixa_estado_pendurado(self) -> None:
+        """Sem estado escolhido não há um `estado=` vazio no link.
+
+        Um `?estado=&page=2` funciona, mas é um filtro vazio que parece escolhido
+        e não é.
+        """
+        self._imoveis(PAGINA_PADRAO + 1, Property.Status.UNDER_VALIDATION)
+
+        resposta = self.client.get(self.url)
+
+        self.assertEqual(resposta.context["estado_consulta"], {})
+        self.assertNotContains(resposta, "estado=&page=2")
+
+
+class CuratorDetailHistoryPaginationTests(TestCase):
+    """O histórico de estados da ficha pagina em vez de se cortar a vinte."""
+
+    def setUp(self) -> None:
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(curator=self.curator, owner=self.owner)
+        self.url = reverse("properties:curator_detail", args=[self.prop.reference])
+        self.client.force_login(self.curator)
+
+    def _transicoes(self, quantas: int) -> None:
+        for indice in range(quantas):
+            PropertyStatusEvent.objects.create(
+                property=self.prop,
+                from_status=Property.Status.DRAFT,
+                to_status=Property.Status.IN_REVIEW,
+                actor=self.curator,
+                reason=f"Transição {indice:02d}",
+            )
+
+    def test_o_historico_mostra_seis_de_seis(self) -> None:
+        """O `[:20]` era um tecto mudo: a ficha não dizia que havia mais."""
+        self._transicoes(PAGINA_PADRAO + 1)
+
+        primeira = self.client.get(self.url)
+        segunda = self.client.get(self.url, {"page": 2})
+
+        self.assertEqual(len(primeira.context["status_events"]), PAGINA_PADRAO)
+        self.assertEqual(len(segunda.context["status_events"]), 1)
+        self.assertEqual(
+            primeira.context["status_events"].paginator.count, PAGINA_PADRAO + 1
+        )
+        self.assertContains(primeira, "Paginação do histórico de estados")
+
+    def test_o_historico_comeca_pelas_transicoes_mais_recentes(self) -> None:
+        """A ordem é `-created_at`, e paginar não pode trocar a sentido à página.
+
+        O `[:20]` mostrava as mais recentes. Se a página 1 passasse a dar as mais
+        antigas, quem abre a ficha para saber o que aconteceu agora lia o
+        contrário do que a ficha promete.
+        """
+        self._transicoes(PAGINA_PADRAO + 1)
+
+        primeira = self.client.get(self.url)
+
+        reasons = [event.reason for event in primeira.context["status_events"]]
+        self.assertEqual(reasons[0], f"Transição {PAGINA_PADRAO:02d}")

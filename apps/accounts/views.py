@@ -15,6 +15,7 @@ from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import FormView, ListView
 
+from apps.core.pagination import PAGINA_PADRAO
 from apps.core.permissions import require_admin
 from apps.core.ratelimit import check_rate_limit, reset_rate_limit
 
@@ -232,7 +233,7 @@ class TeamListView(ListView):
 
     template_name = "accounts/team_list.html"
     context_object_name = "membros"
-    paginate_by = 25
+    paginate_by = PAGINA_PADRAO
 
     def dispatch(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
         """Restringe a lista à administração (§3)."""
@@ -283,7 +284,7 @@ class ClientListView(ListView):
 
     template_name = "accounts/client_list.html"
     context_object_name = "clientes"
-    paginate_by = 25
+    paginate_by = PAGINA_PADRAO
 
     def dispatch(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
         """Restringe a lista à administração (§3)."""
@@ -306,10 +307,14 @@ class ClientListView(ListView):
         return base.order_by("full_name")
 
     def get_context_data(self, **kwargs: object) -> dict[str, object]:
-        """Devolve também o texto pesquisado, para o campo o repetir."""
+        """Devolve também o texto pesquisado, para o campo e a página o repetirem."""
         context = super().get_context_data(**kwargs)
-        context["procura"] = (self.request.GET.get("q") or "").strip()
+        procura = (self.request.GET.get("q") or "").strip()
+        context["procura"] = procura
         context["total"] = User.objects.filter(is_team_member=False).count()
+        # A página seguinte tem de herdar a pesquisa. Mudar de página a perder a
+        # `?q=` é devolver a lista inteira a quem acabou de a reduzir.
+        context["consulta_lista"] = {"q": procura} if procura else {}
         return context
 
 

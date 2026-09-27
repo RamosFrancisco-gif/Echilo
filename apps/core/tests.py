@@ -11,15 +11,18 @@ from pathlib import Path
 
 from django import forms
 from django.apps import apps
+from apps.core.pagination import PAGINA_PADRAO, pagina_de
 from apps.core.templatetags.echilo_format import distance, kwanza, kwanza_compact
 from django.conf import settings
 from django.contrib.staticfiles import finders
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.http import HttpRequest
+from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.template import Context, Template
 from django.template.loader import render_to_string
+from django.views.generic import ListView
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
@@ -1599,4 +1602,81 @@ class VerifyMapTilesTests(SimpleTestCase):
 
         self.assertEqual(x12, x11 * 2)
         self.assertEqual(y12, y11 * 2)
+
+
+class PaginaDeTests(SimpleTestCase):
+    """O paginador das views que não são `ListView`."""
+
+    def _pedido(self, pagina: str = "") -> HttpRequest:
+        return RequestFactory().get("/", {"page": pagina} if pagina else {})
+
+    def test_divide_a_lista_pelas_paginas(self) -> None:
+        """Treze linhas a seis dão duas páginas cheias e uma de uma."""
+        pagina = pagina_de(range(PAGINA_PADRAO * 2 + 1), self._pedido())
+
+        self.assertEqual(len(pagina.object_list), PAGINA_PADRAO)
+        self.assertEqual(pagina.paginator.num_pages, 3)
+        self.assertTrue(pagina.has_next())
+
+    def test_a_segunda_pagina_tem_o_que_sobra(self) -> None:
+        pagina = pagina_de(range(7), self._pedido("2"))
+
+        self.assertEqual(list(pagina.object_list), [6])
+
+    def test_uma_pagina_que_nao_existe_volta_a_ultima(self) -> None:
+        """Um `?page=99` escrito à mão não devolve uma página de erro.
+
+        O `get_page` do Django é o que resolve isto, e é a razão de a fila de
+        contactos não precisar de um `try` à volta do `page()`.
+        """
+        pagina = pagina_de(range(7), self._pedido("99"))
+
+        self.assertEqual(pagina.number, 2)
+
+    def test_uma_pagina_que_nao_e_numero_volta_a_primeira(self) -> None:
+        """`?page=lixo` também não é uma página de erro."""
+        pagina = pagina_de(range(7), self._pedido("lixo"))
+
+        self.assertEqual(pagina.number, 1)
+
+
+class ListagensUsamOPaginaPadraoTests(SimpleTestCase):
+    """Nenhuma listagem escreve o seu próprio tamanho de página.
+
+    O número estava em três sítios com três valores — `12`, `24` e `25` —, e a
+    divergência não dá erro nenhum: cada listagem respondia à pergunta com um
+    número diferente e todas elas pareciam correctas. A regra é uma só, e este
+    teste é o que a mantém.
+    """
+
+    def _listagens(self) -> list[tuple[type[ListView], str]]:
+        encontradas: list[tuple[type[ListView], str]] = []
+        for app_config in apps.get_app_configs():
+            try:
+                modulo = import_module(f"{app_config.name}.views")
+            except ModuleNotFoundError:
+                continue
+            for nome, obj in vars(modulo).items():
+                if (
+                    isinstance(obj, type)
+                    and issubclass(obj, ListView)
+                    and obj is not ListView
+                ):
+                    encontradas.append((obj, f"{app_config.name}.views.{nome}"))
+        return encontradas
+
+    def test_toda_a_listagem_usa_o_tamanho_partilhado(self) -> None:
+        """Cada `ListView` do projecto tem de paginar com `PAGINA_PADRAO`."""
+        for view, nome in self._listagens():
+            with self.subTest(listagem=nome):
+                self.assertEqual(view.paginate_by, PAGINA_PADRAO)
+
+    def test_a_varredura_encontra_as_listagens_do_projecto(self) -> None:
+        """A varredura não pode passar a verde por não ver nada.
+
+        Um teste que percorre classes que ninguém voltou a registar continua a
+        passar quando a lista esvazia, e é a forma mais barata de um teste de
+        guarda não estar a guardar nada.
+        """
+        self.assertGreaterEqual(len(self._listagens()), 5)
 

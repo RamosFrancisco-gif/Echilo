@@ -264,6 +264,7 @@
               <li>Sem transições registadas.</li>
             {% endfor %}
           </ul>
+          {% include "partials/pagination.html" with page_obj=status_events rotulo="Paginação do histórico de estados" %}
         </div>
         <div class="sidebar-card mt-16" id="apagar">
           <h3>Apagar imóvel</h3>

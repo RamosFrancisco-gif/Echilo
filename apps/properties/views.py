@@ -6,7 +6,6 @@ from ipaddress import ip_address
 
 from django.contrib import messages
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.core.paginator import Paginator
 from django.db.models import Count, QuerySet
 from django.http import (
     Http404,
@@ -22,6 +21,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import DetailView, FormView, ListView, View
 
 from apps.core.maps import area_map_config
+from apps.core.pagination import PAGINA_PADRAO, pagina_de
 from apps.core.permissions import require_document_access, require_team_member
 from apps.core.ratelimit import client_ip
 from apps.core.storage import CloudinaryDocumentStorage, MIME_IMAGEM_ACEITE
@@ -56,8 +56,6 @@ from .services import (
 )
 from .validators import MAX_FOTOS, MIN_FOTOS, remaining_photo_slots
 
-PAGE_SIZE = 12
-
 
 def ip_de_auditoria(request: HttpRequest) -> str | None:
     """Endereço de quem pediu o documento, ou `None` quando não é um endereço.
@@ -80,7 +78,7 @@ class HomeView(ListView):
 
     template_name = "index.html"
     context_object_name = "featured"
-    paginate_by = 6
+    paginate_by = PAGINA_PADRAO
 
     def get_queryset(self) -> list[Property]:
         """Devolve os imóveis publicados em destaque."""
@@ -122,7 +120,7 @@ class PropertyListView(ListView):
 
     template_name = "properties/property_list.html"
     context_object_name = "properties"
-    paginate_by = PAGE_SIZE
+    paginate_by = PAGINA_PADRAO
 
     def dispatch(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
         """Interpreta a query string uma única vez, para não repetir a consulta."""
@@ -213,7 +211,7 @@ class CuratorDashboardView(ListView):
 
     template_name = "properties/curator_dashboard.html"
     context_object_name = "properties"
-    paginate_by = 24
+    paginate_by = PAGINA_PADRAO
 
     def dispatch(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
         """Bloqueia o acesso de clientes e de visitantes sem sessão iniciada."""
@@ -257,7 +255,9 @@ class CuratorDashboardView(ListView):
             {"valor": valor, "nome": nome, "total": contagens.get(valor, 0)}
             for valor, nome in Property.Status.choices
         ]
-        context["estado_activo"] = self.estado_activo()
+        estado = self.estado_activo()
+        context["estado_activo"] = estado
+        context["estado_consulta"] = {"estado": estado} if estado else {}
         context["total_equipa"] = Property.objects.count()
         return context
 
@@ -421,7 +421,14 @@ class CuratorPropertyDetailView(FormView):
                 # duas fontes para a mesma pergunta é uma resposta que diverge
                 # conforme se pergunta ao formulário ou à vista.
                 "transition_form": PropertyTransitionForm(property=prop),
-                "status_events": prop.status_events.select_related("actor")[:20],
+                # O histórico era um `[:20]` mudo: a ficha que tiver mais de vinte
+                # transições mostrava as mais recentes e nada dizia que as outras
+                # existiam. Paginando, quem procura a primeira mudança de estado
+                # deixa de precisar de adivinhar em que página ela ficou.
+                "status_events": pagina_de(
+                    prop.status_events.select_related("actor"), pedido
+                ),
+                "consulta_lista": {},
                 "max_fotos": MAX_FOTOS,
                 "min_fotos": MIN_FOTOS,
                 "fotos_livres": remaining_photo_slots(prop.images.count()),

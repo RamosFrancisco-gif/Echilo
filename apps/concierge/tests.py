@@ -11,6 +11,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.core.pagination import PAGINA_PADRAO
 from apps.core.testing import make_owner, make_property, make_user
 from apps.properties.models import Property
 
@@ -274,3 +275,60 @@ class LeadQueueTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.context["leads"]), 2)
+
+
+class LeadQueuePaginationTests(TestCase):
+    """A fila de contactos é paginada, e a paginação sabe o que está a mostrar."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.url = reverse("concierge:lead_queue")
+        self.agent = make_user(role=User.Role.AGENT, email="agente@exemplo.ao")
+        self.leads = [
+            Lead.objects.create(
+                full_name=f"Contacto {indice:02d}",
+                phone="+244 912 345 678",
+                lead_type=Lead.Type.CLIENT_ENQUIRY,
+                status=Lead.Status.NEW,
+            )
+            for indice in range(PAGINA_PADRAO + 1)
+        ]
+
+    def test_a_fila_mostra_seis_de_seis(self) -> None:
+        """A primeira página traz seis e a segunda traz a que resta."""
+        self.client.force_login(self.agent)
+        primeira = self.client.get(self.url)
+        segunda = self.client.get(self.url, {"page": 2})
+
+        self.assertEqual(len(primeira.context["leads"]), PAGINA_PADRAO)
+        self.assertEqual(len(segunda.context["leads"]), 1)
+        # A fila é `-created_at`, ou seja o mais recente primeiro. O contacto que
+        # fica de fora é o primeiro a ter entrado, e é esse que a segunda página
+        # tem de trazer — a escolha errada aqui era supor ordem de inserção.
+        mais_antigo = self.leads[0]
+        self.assertNotIn(mais_antigo.full_name, primeira.content.decode())
+        self.assertContains(segunda, mais_antigo.full_name)
+
+    def test_a_fila_diz_quantas_paginas_tem(self) -> None:
+        """A caixa de navegação aparece e diz o total."""
+        self.client.force_login(self.agent)
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Paginação da fila de contactos")
+        self.assertContains(response, "de 2")
+        self.assertContains(response, "page=2")
+
+    def test_a_pagina_seguinte_guarda_o_filtro(self) -> None:
+        """Mudar de página a perder o filtro é trocar a vista sem ninguém pedir."""
+        self.client.force_login(self.agent)
+        response = self.client.get(self.url, {"status": Lead.Status.NEW})
+
+        self.assertContains(response, "status=NEW")
+        self.assertContains(response, "page=2")
+
+    def test_a_fila_nao_corta_mais_a_cento(self) -> None:
+        """Já não há um tecto mudo: o total é o que o paginador diz."""
+        self.client.force_login(self.agent)
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.context["leads"].paginator.count, PAGINA_PADRAO + 1)

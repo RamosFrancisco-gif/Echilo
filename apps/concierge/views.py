@@ -9,6 +9,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
+from apps.core.pagination import pagina_de
 from apps.core.permissions import require_team_member
 from apps.properties.models import Property
 from apps.properties.selectors import PropertyQueryService
@@ -126,21 +127,39 @@ def lead_queue(request: HttpRequest) -> HttpResponse:
     """Fila interna de contactos, ordenada por urgência."""
     require_team_member(request)
     form = LeadAdminFilterForm(request.GET or None)
-    leads = Lead.objects.select_related("assigned_to", "property_interest").all()
+    # O `-id` é o desempate. O `ordering` do modelo é só por `-created_at`, e dois
+    # contactos criados no mesmo instante ficavam por ordenar: a página 1 levava
+    # um deles e a página 2 podia levar o mesmo. Com a fila a paginar, isso é um
+    # contacto que desaparece sem ninguém o apagar.
+    leads = Lead.objects.select_related("assigned_to", "property_interest").order_by(
+        "-created_at", "-id"
+    )
+    active_type = ""
+    active_status = ""
     if form.is_valid():
-        lead_type = str(form.cleaned_data.get("lead_type") or "")
-        status = str(form.cleaned_data.get("status") or "")
-        if lead_type:
-            leads = leads.filter(lead_type=lead_type)
-        if status:
-            leads = leads.filter(status=status)
+        active_type = str(form.cleaned_data.get("lead_type") or "")
+        active_status = str(form.cleaned_data.get("status") or "")
+        if active_type:
+            leads = leads.filter(lead_type=active_type)
+        if active_status:
+            leads = leads.filter(status=active_status)
     return render(
         request,
         "concierge/lead_queue.html",
         {
             "form": form,
-            "leads": leads[:100],
-            "active_type": str(request.GET.get("lead_type") or ""),
-            "active_status": str(request.GET.get("status") or ""),
+            # A fila era um `[:100]` mudo. Cortava sem dizer que cortou, e a
+            # equipa via uma lista acabada a meio sem forma de saber que o
+            # formulário de adesão continua a entrar por baixo dela.
+            "leads": pagina_de(leads, request),
+            "active_type": active_type,
+            "active_status": active_status,
+            # Mudar de página a perder o filtro é trocar a fila dos proprietários
+            # pela fila toda sem que ninguém tenha pedido essa troca.
+            "consulta_lista": {
+                chave: valor
+                for chave, valor in (("lead_type", active_type), ("status", active_status))
+                if valor
+            },
         },
     )

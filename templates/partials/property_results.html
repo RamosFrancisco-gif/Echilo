@@ -15,14 +15,4 @@
 
 {% include "partials/property_grid.html" %}
 
-{% if page_obj.paginator.num_pages > 1 %}
-  <nav class="pagination" aria-label="Paginação dos imóveis">
-    {% if page_obj.has_previous %}
-      <a href="?{% for key, value in active_filters.items %}{{ key }}={{ value|urlencode }}&amp;{% endfor %}page={{ page_obj.previous_page_number }}" rel="prev">Anterior</a>
-    {% endif %}
-    <span class="is-current">{{ page_obj.number }}</span>
-    {% if page_obj.has_next %}
-      <a href="?{% for key, value in active_filters.items %}{{ key }}={{ value|urlencode }}&amp;{% endfor %}page={{ page_obj.next_page_number }}" rel="next">Seguinte</a>
-    {% endif %}
-  </nav>
-{% endif %}
+{% include "partials/pagination.html" with page_obj=page_obj consulta_lista=active_filters rotulo="Paginação dos imóveis" %}

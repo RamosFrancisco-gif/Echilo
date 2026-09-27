@@ -16,6 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounts.forms import LIMITE_FOTO_PERFIL_MB
+from apps.core.pagination import PAGINA_PADRAO
 from apps.core.testing import jpeg_bytes, make_user, select_options
 from apps.core.validators import normalize_nif
 from apps.properties.reference import ANGOLA_PROVINCES
@@ -812,6 +813,56 @@ class AccountAdminTests(RateLimitFreeTestCase):
         self.assertContains(response, "curador@echilo.ao")
         self.assertContains(response, "agente@echilo.ao")
         self.assertNotContains(response, "cliente@echilo.ao")
+
+    def test_a_lista_de_clientes_mostra_seis_de_seis(self) -> None:
+        """A lista de clientes pagina de seis em seis, como todas as outras."""
+        # O `setUp` já deixou um cliente, e seis novos dão os sete que fazem duas
+        # páginas. Somar `PAGINA_PADRAO + 1` ao que já lá está dava oito e a
+        # segunda página vinha com dois, que também é correcto e não testa nada.
+        for indice in range(PAGINA_PADRAO):
+            make_user(email=f"cliente{indice:02d}@exemplo.ao")
+
+        self.client.force_login(self.admin)
+        primeira = self.client.get(reverse("accounts:client_list"))
+        segunda = self.client.get(reverse("accounts:client_list"), {"page": 2})
+
+        self.assertEqual(len(primeira.context["clientes"]), PAGINA_PADRAO)
+        self.assertEqual(len(segunda.context["clientes"]), 1)
+        self.assertEqual(primeira.context["page_obj"].paginator.num_pages, 2)
+
+    def test_a_lista_da_equipa_mostra_seis_de_seis(self) -> None:
+        """A lista da equipa pagina com a mesma medida, sem filtro nenhum."""
+        # O `setUp` deixou três membros — administrador, curador e agente —, e
+        # quatro curadores novo chegam aos sete.
+        for indice in range(4):
+            make_user(role=User.Role.CURATOR, email=f"extra{indice:02d}@exemplo.ao")
+
+        self.client.force_login(self.admin)
+        primeira = self.client.get(reverse("accounts:team_list"))
+        segunda = self.client.get(reverse("accounts:team_list"), {"page": 2})
+
+        self.assertEqual(len(primeira.context["membros"]), PAGINA_PADRAO)
+        self.assertEqual(len(segunda.context["membros"]), 1)
+        # A caixa de navegação não depende de nenhum filtro, por isso o `include`
+        # passa só o rótulo: é a prova de que uma chave de filtro em falta não
+        # parte a caixa.
+        self.assertContains(primeira, "Paginação da equipa")
+        self.assertContains(primeira, "page=2")
+
+    def test_a_pagina_dos_clientes_guarda_a_pesquisa(self) -> None:
+        """Mudar de página a perder a pesquisa é devolver a lista de surpresa."""
+        for indice in range(PAGINA_PADRAO + 1):
+            make_user(email=f"procurado{indice:02d}@exemplo.ao")
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("accounts:client_list"), {"q": "procurado"})
+
+        # Sete clientes com o mesmo nome de família e nenhum outro: o paginador
+        # diz sete e a página dá seis, e a pesquisa sobrevive ao link.
+        self.assertEqual(response.context["page_obj"].paginator.count, PAGINA_PADRAO + 1)
+        self.assertEqual(len(response.context["clientes"]), PAGINA_PADRAO)
+        self.assertContains(response, "q=procurado")
+        self.assertContains(response, "page=2")
 
     def test_a_lista_de_clientes_traz_os_clientes_e_nao_a_equipa(self) -> None:
         """O inverso do teste anterior, pelo mesmo motivo."""
