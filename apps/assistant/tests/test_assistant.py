@@ -7,8 +7,10 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.messages import add_message, constants
+from django.contrib.messages.middleware import MessageMiddleware
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.template.loader import render_to_string
 from django.urls import reverse
 
@@ -21,6 +23,7 @@ from apps.assistant.tools import (
     _coerce_int,
     run_tool,
 )
+from apps.assistant.views import chat_window
 from apps.concierge.models import Conversation, Message
 from apps.concierge.services import messages_after
 from apps.core.testing import make_owner, make_property, make_user
@@ -663,6 +666,65 @@ class ChatAppendTests(TestCase):
         self.assertTrue(devolvidas, "o turno novo tem de vir mesmo com a interna a meio")
 
 
+class ConversaNaoSaiDaDivTests(TestCase):
+    """A conversa vive dentro de #chat-body e em mais lado nenhum.
+
+    `messages` é o nome que o `base.html` dá aos avisos de flash do Django. Uma
+    view que põe a conversa sob esse nome não dá erro: o `base.html` desenha-a
+    como uma lista de avisos no topo do `<main>`, e cada mensagem aparece duas
+    vezes — uma como caixa azul antes do cabeçalho da secção, outra como bolha.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.user = make_user(email="div@exemplo.ao")
+        self.client.force_login(self.user)
+        self.conversation = Conversation.objects.create(user=self.user)
+        Message.objects.create(
+            conversation=self.conversation,
+            author=Message.Author.CLIENT,
+            body="Qual é a renda do T3 no Kilamba?",
+        )
+        Message.objects.create(
+            conversation=self.conversation,
+            author=Message.Author.ASSISTANT,
+            body="Está a 450.000 Kz por mês.",
+        )
+
+    def test_a_mensagem_aparece_uma_vez_so_na_pagina(self) -> None:
+        """A conversa não é desenhada também como aviso de flash."""
+        pagina = self.client.get(reverse("assistant:chat"))
+        html = pagina.content.decode()
+
+        self.assertEqual(html.count("Qual é a renda do T3 no Kilamba?"), 1)
+        self.assertEqual(html.count("Está a 450.000 Kz por mês."), 1)
+
+    def test_a_pagina_nao_desenha_caixas_de_aviso(self) -> None:
+        """Sem aviso nenhum, o topo do `<main>` fica limpo."""
+        pagina = self.client.get(reverse("assistant:chat"))
+
+        self.assertNotContains(pagina, 'class="alert')
+
+    def test_o_flash_continua_a_funcionar_com_conversa_no_ecra(self) -> None:
+        """Arranjar o nome da chave não pode custar os avisos de todas as páginas.
+
+        O defeito tinha uma segunda cara: com `messages` ocupado pela conversa,
+        um aviso de flash deixava de aparecer. Por isso o teste põe os dois no
+        mesmo ecrã.
+        """
+        request = RequestFactory().get(reverse("assistant:chat"))
+        request.user = self.user
+        request.session = self.client.session
+        MessageMiddleware(lambda _request: None).process_request(request)
+        add_message(request, constants.INFO, "Perfil alterado.")
+
+        html = chat_window(request).content.decode()
+
+        self.assertIn("Perfil alterado.", html)
+        self.assertIn("Qual é a renda do T3 no Kilamba?", html)
+        self.assertIn('class="alert', html)
+
+
 class InternalEscalationReasonTests(TestCase):
     """O motivo técnico da escalação é da equipa e não entra na conversa do cliente."""
 
@@ -737,7 +799,7 @@ class InternalEscalationReasonTests(TestCase):
 
         html = render_to_string(
             "assistant/_messages.html",
-            {"messages": list(conversation.messages.all())},
+            {"chat_messages": list(conversation.messages.all())},
         )
 
         self.assertIn("Resposta que o cliente deve ler.", html)

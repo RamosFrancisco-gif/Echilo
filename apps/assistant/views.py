@@ -70,7 +70,7 @@ def chat_window(request: HttpRequest) -> HttpResponse:
     conversation = _active_conversation(request)
     if conversation is not None and not request.user.is_authenticated:
         request.session[SESSION_CONVERSATION_KEY] = conversation.pk
-    messages = (
+    mensagens = (
         recent_messages(conversation, limit=HISTORY_WINDOW) if conversation is not None else []
     )
     return render(
@@ -81,8 +81,8 @@ def chat_window(request: HttpRequest) -> HttpResponse:
             "conversation": conversation,
             "history_window": HISTORY_WINDOW,
             "show_greeting": True,
-            "messages": messages,
-            "last_message_id": messages[-1].pk if messages else None,
+            "chat_messages": mensagens,
+            "last_message_id": mensagens[-1].pk if mensagens else None,
             "is_escalated": bool(
                 conversation and conversation.status == Conversation.Status.ESCALATED
             ),
@@ -103,7 +103,7 @@ def chat_message(request: HttpRequest) -> HttpResponse:
             request,
             "assistant/_messages.html",
             {
-                "messages": [],
+                "chat_messages": [],
                 "show_greeting": False,
                 "notice": _(
                     "Chegámos ao limite de perguntas por alguns minutos. "
@@ -148,7 +148,7 @@ def chat_message(request: HttpRequest) -> HttpResponse:
                 request,
                 "assistant/_messages.html",
                 {
-                    "messages": recent_messages(conversation, limit=HISTORY_WINDOW),
+                    "chat_messages": recent_messages(conversation, limit=HISTORY_WINDOW),
                     "show_greeting": False,
                     "conversation_id": result.conversation_id,
                     "is_escalated": result.is_escalated,
@@ -158,7 +158,7 @@ def chat_message(request: HttpRequest) -> HttpResponse:
             request,
             "assistant/_messages.html",
             {
-                "messages": messages_after(conversation, after_id=after_id),
+                "chat_messages": messages_after(conversation, after_id=after_id),
                 "show_greeting": False,
                 "conversation_id": result.conversation_id,
                 "is_escalated": result.is_escalated,

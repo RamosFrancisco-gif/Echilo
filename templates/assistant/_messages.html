@@ -8,8 +8,12 @@
   página pelas 6 últimas, e a conversa encolhia a cada turno. As mensagens
   internas da equipa nunca entram — `messages_after` e `recent_messages`
   excluem-nas, e o filtro abaixo é a rede para um contexto escrito à mão.
-{% endcomment %}
-{% for message in messages %}
+
+  A chave do contexto é `chat_messages` e não `messages`: `base.html` desenha
+  `messages` como avisos de flash no topo do `<main>`, e uma chave com esse nome
+  punha a conversa inteira em caixas azuis acima do chat — cada mensagem duas
+  vezes no ecrã, e nenhuma delas dentro da conversa. {% endcomment %}
+{% for message in chat_messages %}
   {% if not message.is_internal %}
   <div class="bubble {% if message.author == 'CLIENT' %}bubble--client{% elif message.author == 'STAFF' %}bubble--staff{% endif %}{% if message.is_escalation_notice %} bubble--notice{% endif %}"
        data-message-id="{{ message.pk }}">
