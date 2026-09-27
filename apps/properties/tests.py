@@ -22,6 +22,7 @@ from django.http import HttpResponse
 from django.templatetags.static import static
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from django.utils.datastructures import MultiValueDict
 
 from apps.core.geo import haversine_metres
 from apps.core.templatetags.echilo_format import coordinate
@@ -875,19 +876,74 @@ class CuratorActionTests(TestCase):
         form = PropertyImageUploadForm()
         self.assertEqual(no_input.group(1), form.fields["images"].widget.attrs["accept"])
 
+    def test_o_input_das_fotografias_declara_que_aceita_varias(self) -> None:
+        """O `multiple` é uma declaração da classe, e a classe é o que a lê.
+
+        A CVE-2023-31047 passou a recusar o atributo `multiple` em `FileInput` e
+        em `ClearableFileInput` — um `FileField` só validava o último ficheiro,
+        e o browser mandar doze contornava a validação. A forma sancionada é o
+        widget declarar `allow_multiple_selected`.
+
+        O que este teste mede é a causa, e não o sintoma. Medir «o formulário
+        construiu» chegava para o `4.2` local, que é anterior ao patch e não
+        recusa nada; a falha só aparecia no build da Vercel, onde o `4.2` mais
+        recente é que instala. O `attrs` do widget e o atributo de classe são as
+        duas coisas que o Django interroga, e as duas estão aqui.
+        """
+        widget = PropertyImageUploadForm().fields["images"].widget
+
+        self.assertTrue(widget.allow_multiple_selected)
+        # O atributo tem de chegar ao HTML mesmo sem estar escrito à mão: é o
+        # `InputDeFotografias` que o junta, e um Django anterior ao patch não o
+        # faz. Sem ele a pessoa escolhe um ficheiro de cada vez e a página não dá
+        # erro nenhum — o que a torna a falha mais difícil de ver.
+        self.assertIn("multiple", widget.attrs)
+        self.assertIn("multiple", str(widget.render("images", None)))
+
     def test_o_input_das_fotografias_nao_oferece_apagar(self) -> None:
         """O widget das fotografias é o que aceita várias, e não o que as apaga.
 
         O `clean_images` do mixin lê `self.files` e ignora o que o widget devolve,
         por isso a caixa de apagar do `ClearableFileInput` aparecia na página sem
         destino: marcada, devolvia "este campo é obrigatório" em vez de apagar.
-        E o widget é recusado a partir de um patch do 4.2, que o `4.2` inicial
-        instalado aqui não recusa — por isso o erro só dava em produção.
+        E o `ClearableFileInput` é recusado a partir do patch, tal como o
+        `FileInput` — trocar só de classe não resolvia nada.
         """
         widget = PropertyImageUploadForm().fields["images"].widget
 
         self.assertNotIsInstance(widget, forms.ClearableFileInput)
-        self.assertTrue(widget.attrs["multiple"])
+
+    def test_o_campo_das_fotografias_aceita_a_lista_inteira(self) -> None:
+        """O `BaseForm` limpa o campo antes do `clean_<campo>`, e a lista não é um ficheiro.
+
+        Um `FileField` que devolva um `ValueError` de «nenhum ficheiro foi
+        submetido» quando recebe a lista é o sintoma de dois factos em conjunto:
+        o `value_from_datadict` do widget devolve a lista (porque o campo aceita
+        várias), e o `BaseForm` corre `field.clean()` **antes** do `clean_<campo>`.
+        Sem o `CampoDeFotografias`, o formulário era recusado com as fotografias
+        carregadas e o `multiple` no HTML — e a página só dizia que não havia
+        ficheiro nenhum.
+
+        O que se mede aqui é que a validação não foi desligada com isto: um
+        ficheiro que não é imagem continua a ser recusado, ficheiro a ficheiro.
+        """
+        ficheiros = MultiValueDict()
+        ficheiros.setlist("images", [self._jpg("capa.jpg"), self._jpg("sala.jpg")])
+
+        form = PropertyImageUploadForm(data={}, files=ficheiros, property=self.prop)
+
+        self.assertTrue(form.is_valid(), form.errors.as_text())
+        self.assertEqual(len(form.cleaned_data["images"]), 2)
+
+        com_um_ficheiro_mau = MultiValueDict()
+        nota = SimpleUploadedFile("nota.pdf", b"%PDF-1.4", content_type="application/pdf")
+        com_um_ficheiro_mau.setlist("images", [self._jpg("capa.jpg"), nota])
+        recusa = PropertyImageUploadForm(data={}, files=com_um_ficheiro_mau, property=self.prop)
+
+        self.assertTrue(recusa.is_valid())
+        guardadas = [ficheiro.name for ficheiro in recusa.cleaned_data["images"]]
+        self.assertEqual(guardadas, ["capa.jpg"])
+        self.assertTrue(recusa.recusas)
 
     def test_a_ficha_oferece_a_apagar_cada_fotografia(self) -> None:
         """Sem botão de apagar, um tecto de quinze é um muro sem volta."""

@@ -229,6 +229,54 @@ class PrazoDeContratoMixin:
         return cleaned
 
 
+class InputDeFotografias(forms.FileInput):
+    """O input que aceita várias fotografias, e declara-o ao Django.
+
+    A CVE-2023-31047 passou a recusar o atributo `multiple` em `FileInput` e em
+    `ClearableFileInput`: um `FileField` sozinho só valida o *último* ficheiro,
+    e o browser poder mandar doze era a forma de a validação ser contornada.
+
+    A forma sancionada é o widget declarar `allow_multiple_selected`, e é uma
+    classe — não um dicionário de atributos. O Django interroga a classe no
+    `__init__`, e escrevê-lo nos `attrs` do campo é escrevê-lo fora do sítio
+    onde é lido: o `attrs` diz o que o browser recebe, e o que este Django
+    valida é a classe. As duas coisas podem discordar, e quando discordam o
+    formulário deixa de existir.
+
+    Sem isto o `ValueError` é levantado ao importar os urls, e a página toda dá
+    500 — inclusive o `favicon` — sem que nada na falha mentione fotografias.
+    Este campo é que sabe tratar a lista: o `clean_images` de baixo lê
+    `self.files` e valida cada ficheiro por separado, um a um, que é
+    precisamente o que a CVE pede.
+    """
+
+    allow_multiple_selected = True
+
+
+class CampoDeFotografias(forms.FileField):
+    """Um `FileField` que não valida o ficheiro, porque esse trabalho é do `clean_images`.
+
+    A CVE-2023-31047 existe porque um `FileField` só sabe validar o ficheiro que
+    lhe chega, e o `BaseForm` chama `field.clean()` **antes** do `clean_<campo>`:
+    o valor que o campo recebe vem do `value_from_datadict` do widget, e com o
+    opt-in esse valor é a lista inteira. O `to_python` recebe uma lista, não a
+    reconhece como ficheiro, e recusa o formulário com «Nenhum ficheiro foi
+    submetido» — quando o ficheiro foi, e há doze.
+
+    Não é um salto na validação, é a validação no sítio certo: quem abre cada
+    ficheiro e decide se entra é o `clean_images`, com o Pillow, ficheiro a
+    ficheiro. Este campo limita-se a não fingir que valida o que não sabe.
+
+    O `required` também deixa de valer aqui, e pelo mesmo motivo: a mensagem
+    «Escolha pelo menos uma fotografia» diz o que fazer, e sabe se a ficha ou o
+    cadastro é que exige o lote.
+    """
+
+    def clean(self, value: object, initial: object | None = None) -> object:
+        """Deixa a lista tal como o widget a devolveu."""
+        return value
+
+
 class ImagensDoImovelMixin(BaseStyledForm):
     """As fotografias do imóvel, e a validação que cada ficheiro tem de passar.
 
@@ -246,15 +294,19 @@ class ImagensDoImovelMixin(BaseStyledForm):
     Pillow consegue abrir.
     """
 
-    # `FileInput` e não `ClearableFileInput`: o Django recusa `multiple` no
-    # segundo a partir de um patch do 4.2, e o "Actualmente/Apagar" do primeiro
-    # não tem leitura nenhuma — o `clean_images` de baixo lê `self.files` e
-    # ignora o que o widget devolve. Marcada a caixa, a fotografia nem era
-    # apagada: dava "este campo é obrigatório". O `4.2` inicial aceitava
-    # `multiple` em silêncio, que é por isso que o erro só apareceu em produção.
-    images = forms.FileField(
+    # O `multiple` não é escrito aqui: é o `InputDeFotografias` que o declara,
+    # porque é a classe que o Django lê para decidir se o aceita. Repeti-lo nos
+    # `attrs` daria duas respostas à mesma pergunta — a que o browser recebe e a
+    # que o servidor valida — e a divergência entre as duas só apareceria quando
+    # as versões do Django não coincidissem. O `accept` também vem do
+    # `MIME_IMAGEM_ACEITE`, e por isso o input e o formulário dizem o mesmo.
+    #
+    # O campo é o `CampoDeFotografias` e não o `FileField` porque um só
+    # `FileField` só valida um ficheiro — que é a razão da CVE-2023-31047 e a
+    # razão de o `clean_images` existir.
+    images = CampoDeFotografias(
         label="Fotografias",
-        widget=forms.FileInput(attrs={"multiple": True, "accept": MIME_IMAGEM_ACEITE}),
+        widget=InputDeFotografias(attrs={"accept": MIME_IMAGEM_ACEITE}),
         help_text=(
             f"Podem ser várias de uma vez, até {MAX_FOTOS} fotografias por imóvel. "
             f"A primeira é a capa. JPEG, PNG ou WebP, até {LIMITE_GB} MB cada."

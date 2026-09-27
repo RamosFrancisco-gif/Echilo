@@ -5,12 +5,21 @@
 # ficava a correr um Django que a suite não passa. `apps.core.test_deploy` compara
 # o intervalo declarado com a versão instalada, que é o que apanha a deriva.
 #
+# O mínimo é 4.2.1, e não 4.2, por causa da CVE-2023-31047: a partir desse patch
+# `FileInput` e `ClearableFileInput` recusam o atributo `multiple`, e o `4.2.0`
+# aceita. Com o mínimo em `4.2` o `pip` instala o `.0` num ambiente novo, a
+# suite passa porque o `ValueError` não existe lá, e a falha só aparece no build
+# da Vercel — que resolve para a release mais recente. Um intervalo que aceita a
+# versão anterior ao patch não é largo por Distribution, é um teste que não
+# testa. É o mesmo raciocínio do `5.0`, com uma diferença: o 5.0 mudou a
+# assinatura e apareceu logo; o 4.2.1 só se nota em produção.
+#
 # O `PyMySQL` fica em `<2` porque a 2.x não existe no PyPI. Vale a pena dizer
 # porque é tentador o contrário: `pymysql.__version__` devolve uma versão
 # inventada, porque `install_as_MySQLdb()` a reescreve para satisfazer a
 # verificação de versão do Django. A versão verdadeira é a dos metadados, e é essa
 # que o `pip` resolve.
-Django>=4.2,<5.0
+Django>=4.2.1,<5.0
 PyMySQL>=1.1,<2
 cryptography>=42.0
 Pillow>=10.0
