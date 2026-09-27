@@ -26,7 +26,7 @@ from apps.concierge.services import messages_after
 from apps.core.testing import make_owner, make_property, make_user
 from apps.properties.models import Property
 
-from .fakes import FakeGroqClient, text_reply, tool_reply
+from .fakes import FakeGroqClient, FakeRefusingClient, text_reply, tool_reply
 
 User = get_user_model()
 
@@ -335,26 +335,71 @@ class AskServiceTests(TestCase):
         self.assertTrue(second.is_escalated)
         self.assertEqual(client.request_count, 0)
 
-    def test_model_failure_degrades_gracefully(self) -> None:
-        """Uma falha do provider escala para a equipa em vez de partir a página."""
+    def test_model_failure_degrades_without_escalating(self) -> None:
+        """Uma falha do provider degrada a resposta mas não tira o cliente do nível 1."""
         with (
             override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
             patch("groq.Groq", side_effect=RuntimeError("ligação recusada")),
         ):
             result = ask(question="Qual é a renda?", user=self.user)
 
-        self.assertTrue(result.is_escalated)
+        self.assertFalse(result.is_escalated)
         self.assertTrue(result.is_degraded)
         conversation = Conversation.objects.get(pk=result.conversation_id)
-        self.assertEqual(conversation.status, Conversation.Status.ESCALATED)
+        self.assertEqual(conversation.status, Conversation.Status.OPEN)
+        self.assertEqual(conversation.handled_by, Conversation.HandledBy.AI)
+
+    def test_um_turno_que_entra_no_proximo_volta_a_chegar_ao_modelo(self) -> None:
+        """Depois de uma falha, a conversa não fica condenada a dizer "entregue à equipa"."""
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", side_effect=RuntimeError("ligação recusada")),
+        ):
+            primeiro = ask(question="Qual é a renda?", user=self.user)
+
+        client = FakeGroqClient([text_reply("A renda é 450.000 Kz por mês.")])
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", return_value=client),
+        ):
+            segundo = ask(
+                question="E tem tanque de água?",
+                user=self.user,
+                conversation=Conversation.objects.get(pk=primeiro.conversation_id),
+            )
+
+        self.assertFalse(segundo.is_escalated)
+        self.assertFalse(segundo.is_degraded)
+        self.assertEqual(client.request_count, 1)
+        self.assertIn("450.000 Kz", segundo.answer)
+
+    def test_a_falha_fica_gravada_para_a_equipa(self) -> None:
+        """A indisponibilidade é um problema nosso, e continua registado como tal."""
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", side_effect=RuntimeError("ligação recusada")),
+        ):
+            result = ask(question="Qual é a renda?", user=self.user)
+
+        conversation = Conversation.objects.get(pk=result.conversation_id)
+        internas = list(
+            conversation.messages.filter(is_internal=True).values_list("body", flat=True)
+        )
+        visiveis = " ".join(
+            conversation.messages.filter(is_internal=False).values_list("body", flat=True)
+        )
+        self.assertIn("ligação recusada", " ".join(internas))
+        self.assertNotIn("ligação recusada", visiveis)
 
     def test_disabled_assistant_is_reported_as_degraded(self) -> None:
         """Com o nível 1 desligado a degradação é explícita, não silenciosa."""
         with override_settings(ECHILO_AI_ENABLED=False):
             result = ask(question="Qual é a renda?", user=self.user)
 
-        self.assertTrue(result.is_escalated)
         self.assertTrue(result.is_degraded)
+        self.assertFalse(result.is_escalated)
+        conversation = Conversation.objects.get(pk=result.conversation_id)
+        self.assertEqual(conversation.status, Conversation.Status.OPEN)
 
     def test_blank_question_never_touches_the_network(self) -> None:
         """Uma pergunta vazia devolve a saudação e não abre conversa."""
@@ -641,9 +686,38 @@ class InternalEscalationReasonTests(TestCase):
         internas = list(
             conversation.messages.filter(is_internal=True).values_list("body", flat=True)
         )
-        self.assertIn("Erro técnico no assistente.", internas)
-        self.assertNotIn("Erro técnico no assistente.", visiveis)
-        self.assertIn("Tive um problema técnico a responder.", visiveis)
+        self.assertIn("Nível 1 indisponível", " ".join(internas))
+        self.assertIn("momentaneamente indisponível", visiveis)
+
+    def test_a_degradacao_nao_promete_a_equipa(self) -> None:
+        """Ninguém foi avisado, por isso a resposta não diz que a equipa foi avisada."""
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", side_effect=RuntimeError("ligação recusada")),
+        ):
+            result = ask(question="Qual é a renda?", user=self.user)
+
+        self.assertNotIn("equipa", result.answer.lower())
+
+    def test_um_403_do_fornecedor_e_indisponibilidade_prevista(self) -> None:
+        """O `403` da Groq é o caminho previsto, não um erro técnico."""
+        client = FakeRefusingClient(PermissionError("Access denied. Please check your network settings."))
+
+        with (
+            override_settings(ECHILO_AI_ENABLED=True, ECHILO_AI_API_KEY="test-key"),
+            patch("groq.Groq", return_value=client),
+        ):
+            result = ask(question="Qual é a renda?", user=self.user)
+
+        self.assertTrue(result.is_degraded)
+        self.assertFalse(result.is_escalated)
+        self.assertEqual(client.request_count, 1)
+        conversation = Conversation.objects.get(pk=result.conversation_id)
+        self.assertEqual(conversation.status, Conversation.Status.OPEN)
+        internas = " ".join(
+            conversation.messages.filter(is_internal=True).values_list("body", flat=True)
+        )
+        self.assertIn("Access denied", internas)
 
     def test_a_mensagem_do_assistente_desenhada_nao_traz_o_diagnostico(self) -> None:
         """O partial da conversa não desenha uma mensagem interna."""

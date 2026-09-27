@@ -260,6 +260,35 @@ opcional.
   devolve a mesma frase. Era a mesma frase escrita duas vezes — no `reason` e no
   `answer` — e com o `reason` interno são dois registos com leitores diferentes.
 
+#### Uma falha nossa não é um assunto da equipa
+
+A escalação decide-se **pela pergunta do cliente** e só por ela. Uma resposta do
+modelo, um `403` do fornecedor, uma chave sem permissão, um `egress` bloqueado ou um
+loop de ferramentas que não converge são problemas **nossos**, e punir quem perguntou
+com uma escalada não era o que se queria.
+
+- **Escalar por indisponibilidade não tem volta.** A conversa passava a responder
+  "entregue à equipa" a *todas* as mensagens seguintes, mesmo depois de o fornecedor
+  voltar a responder. O cliente ficava preso num beco sem caminho de volta, e a fila
+  da equipa enchia-se de conversas cujo único conteúdo era "oi".
+- **A conversa fica em `OPEN` e a causa fica escrita.** `_persist_outage()` grava a
+  resposta de recurso e deixa uma nota interna com `note_conversation()`, que é o
+  registo que a equipa precisa. A nota é interna como o `reason` da escalação, e não
+  muda o estado.
+- **A resposta de recurso diz a verdade.** `PROVIDER_UNAVAILABLE` diz que o
+  assistente está indisponível e convida a tentar outra vez. Não diz "já avisei a
+  equipa" quando ninguém foi avisado, e não reusa `FALLBACK_UNKNOWN`, que é outra
+  coisa: essa diz que *não sabemos*, e uma indisponibilidade não é falta de
+  informação.
+- **O `403` é o caminho previsto, não um erro técnico.** `_complete()` traduz
+  qualquer falha do SDK em `AssistantUnavailable`. Sem isso, o `403` subia como
+  excepção do SDK e o serviço via-o pelo `except Exception`, que é o caminho que não
+  sabe responder. `ask()` continua a ter essa rede, porque um `TypeError` nosso também
+  não pode partir a página.
+- **`should_escalate` decide antes de chamar o modelo**, e o `AssistantReply` já não
+  volta a escalar. Analisar a resposta faria escalar conversas cujo único motivo é o
+  modelo sugerir "marcar uma visita".
+
 #### A conversa cresce; não volta a desenhar-se
 
 O HTMX **acrescenta** o turno novo ao fim de `#chat-body` (`hx-swap="beforeend"`)

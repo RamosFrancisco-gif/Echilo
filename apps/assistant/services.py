@@ -12,11 +12,12 @@ from apps.concierge.models import Conversation, Message
 from apps.concierge.services import (
     escalate_conversation,
     get_or_create_conversation,
+    note_conversation,
     recent_messages,
 )
 from apps.properties.models import Property
 
-from .prompts import FALLBACK_UNKNOWN, GREETING, build_system_prompt
+from .prompts import FALLBACK_UNKNOWN, GREETING, PROVIDER_UNAVAILABLE, build_system_prompt
 from .provider import AssistantReply, AssistantUnavailable, GroqProvider, should_escalate
 
 logger = logging.getLogger(__name__)
@@ -99,33 +100,24 @@ def ask(
             history=_history_for(conversation),
             question=question,
         )
-    except AssistantUnavailable:
-        logger.info("Assistente indisponível: a usar resposta de recurso.")
-        return _persist_reply(
-            conversation=conversation,
-            content=FALLBACK_UNKNOWN,
-            is_escalated=True,
-            is_degraded=True,
-            reason="Assistente temporariamente indisponível.",
-        )
-    except Exception:  # noqa: BLE001 — nunca deixar o chat quebrar por erro do provider.
+    except AssistantUnavailable as erro:
+        return _persist_outage(conversation=conversation, reason=str(erro))
+    except Exception as erro:  # noqa: BLE001 — nunca deixar o chat quebrar por erro do provider.
         logger.exception("Falha inesperada ao contactar o modelo.")
-        return _persist_reply(
+        return _persist_outage(
             conversation=conversation,
-            content=(
-                "Tive um problema técnico a responder. Já avisei a equipa, que pode "
-                "continuar o atendimento contigo."
-            ),
-            is_escalated=True,
-            is_degraded=True,
-            reason="Erro técnico no assistente.",
+            reason=f"{type(erro).__name__}: {erro}",
         )
 
+    # A escalação decide-se pela pergunta do cliente e só por ela (§2.4). A
+    # resposta do modelo nunca a justifica: uma falha de rede, uma chave sem
+    # permissão ou um `403` do fornecedor são problemas nossos, escalar por eles
+    # punia quem perguntou com uma conversa que respondia "entregue à equipa"
+    # para sempre, mesmo depois de o fornecedor voltar a responder.
     return _persist_reply(
         conversation=conversation,
         content=reply.content or FALLBACK_UNKNOWN,
-        is_escalated=reply.should_escalate,
-        reason=reply.escalated_reason,
+        is_escalated=False,
     )
 
 
@@ -135,8 +127,7 @@ def _persist_reply(
     conversation: Conversation,
     content: str,
     is_escalated: bool,
-    reason: str,
-    is_degraded: bool = False,
+    reason: str = "",
 ) -> TurnResult:
     """Grava a resposta do assistente e, se necessário, escala para a equipa."""
     Message.objects.create(
@@ -154,7 +145,31 @@ def _persist_reply(
         answer=content,
         conversation_id=conversation.pk,
         is_escalated=is_escalated,
-        is_degraded=is_degraded,
+    )
+
+
+@transaction.atomic
+def _persist_outage(*, conversation: Conversation, reason: str) -> TurnResult:
+    """Regista a indisponibilidade do nível 1 sem tirar o cliente dele.
+
+    A conversa fica em `OPEN`: quem perguntou sobre a renda de um imóvel não
+    precisa de um agente, precisa que o assistente volte a responder. O motivo
+    fica gravado como mensagem interna, que é o que a equipa precisa para
+    diagnosticar, e o cliente recebe uma frase que diz a verdade — o assistente
+    está em baixo e pode-se tentar outra vez.
+    """
+    logger.warning("Nível 1 indisponível: %s", reason)
+    Message.objects.create(
+        conversation=conversation,
+        author=Message.Author.ASSISTANT,
+        body=PROVIDER_UNAVAILABLE,
+    )
+    note_conversation(conversation=conversation, note=f"Nível 1 indisponível: {reason}")
+    return TurnResult(
+        answer=PROVIDER_UNAVAILABLE,
+        conversation_id=conversation.pk,
+        is_escalated=False,
+        is_degraded=True,
     )
 
 

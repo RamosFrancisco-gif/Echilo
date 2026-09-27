@@ -70,3 +70,13 @@ FALLBACK_UNKNOWN = (
     "Não tenho essa informação confirmada. A equipa do Echilo verifica os dados de cada "
     "imóvel antes de o publicar, por isso prefiro não arriscar. Deixo o assunto com eles?"
 )
+
+# Uma indisponibilidade nossa não é a mesma coisa que não saber a resposta, e a
+# diferença é o que o cliente percebe. "Não tenho essa informação" diz que o
+# imóvel não foi publicado; esta diz que a ferramenta falhou e convida a tentar
+# outra vez. Também não promete a equipa: ninguém foi avisado, e prometer isso
+# era fazer o cliente esperar por um contacto que não existe.
+PROVIDER_UNAVAILABLE = (
+    "O assistente está momentaneamente indisponível e não consegui responder. "
+    "A tua pergunta ficou registada — tenta daqui a pouco."
+)

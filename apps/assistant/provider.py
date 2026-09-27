@@ -126,14 +126,7 @@ class GroqProvider:
 
         references: list[str] = []
         for _ in range(MAX_TOOL_ROUNDS):
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=TOOL_SCHEMAS,
-                tool_choice="auto",
-                temperature=0.2,
-                max_tokens=700,
-            )
+            response = self._complete(messages)
             choice = response.choices[0]
             message = choice.message
 
@@ -162,13 +155,39 @@ class GroqProvider:
 
         return AssistantReply(
             content=(
-                "Já tenho dados suficientes sobre o que procuras, mas a consulta está a "
-                "demorar. Deixo o assunto com a equipa do Echilo, que te responde em breve."
+                "Esta consulta está a demorar mais do que devia e não te consigo dar uma "
+                "resposta fiável. Tenta de novo daqui a pouco."
             ),
-            should_escalate=True,
-            escalated_reason="Consulta excedeu o tempo previsto.",
+            should_escalate=False,
+            escalated_reason="",
             tool_references=references,
         )
+
+    def _complete(self, messages: list[dict[str, Any]]) -> Any:
+        """Chama a API e traduz qualquer falha em `AssistantUnavailable`.
+
+        Sem isto, um `403` do fornecedor — que é o sintoma de uma chave sem
+        permissão ou de um `egress` bloqueado — sobe como excepção do SDK e
+        aparece no serviço como erro técnico em vez de indisponibilidade prevista.
+        A diferença não é cosmética: a indisponibilidade é o caminho que sabe
+        responder ao cliente, e o erro técnico é o que não sabe.
+
+        A excepção original vai na mensagem, porque esta nota é interna e é
+        exactamente o que a equipa precisa para diagnosticar. O registo fica
+        com a excepção completa, que inclui o corpo da resposta do fornecedor.
+        """
+        try:
+            return self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_choice="auto",
+                temperature=0.2,
+                max_tokens=700,
+            )
+        except Exception as erro:  # noqa: BLE001 — qualquer falha vira indisponibilidade.
+            logger.error("Chamada ao modelo falhou: %s: %s", type(erro).__name__, erro)
+            raise AssistantUnavailable(f"{type(erro).__name__}: {erro}") from erro
 
 
 def _safe_arguments(raw: str) -> dict[str, Any]:

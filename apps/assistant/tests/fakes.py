@@ -91,6 +91,40 @@ class FakeGroqClient:
         return len(self.calls)
 
 
+class FakeRefusingClient:
+    """Cliente que recusa cada chamada, como uma chave sem permissão.
+
+    O `403` da Groq não nasce ao construir o cliente, nasce na chamada. Um dublê
+    que só levanta na construção não chega ao caminho que o.provider trata, e o
+    teste passava a medir a excepção errada.
+    """
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.calls: list[dict[str, Any]] = []
+        self.chat = type(
+            "FakeChat", (), {"completions": FakeRefusingCompletions(self._error, self.calls)}
+        )()
+
+    @property
+    def request_count(self) -> int:
+        """Número de chamadas feitas ao modelo."""
+        return len(self.calls)
+
+
+class FakeRefusingCompletions:
+    """Levanta o mesmo erro em cada chamada, e conta-as."""
+
+    def __init__(self, error: Exception, calls: list[dict[str, Any]]) -> None:
+        self._error = error
+        self._calls = calls
+
+    def create(self, **kwargs: Any) -> FakeCompletion:
+        """Regista a tentativa e falha como o fornecedor falharia."""
+        self._calls.append(kwargs)
+        raise self._error
+
+
 def text_reply(content: str) -> FakeCompletion:
     """Resposta simples, sem ferramentas."""
     return FakeCompletion(choices=[FakeChoice(message=FakeMessage(content=content))])

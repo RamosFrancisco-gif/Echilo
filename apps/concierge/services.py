@@ -217,3 +217,21 @@ def escalate_conversation(
             is_escalation_notice=True,
         )
     return conversation
+
+
+def note_conversation(*, conversation: Conversation, note: str) -> Message:
+    """Deixa um registo interno sem mexer no estado da conversa.
+
+    Existe porque uma falha nossa não é assunto da equipa humana. Escalar por
+    causa de um `403` do fornecedor punia quem perguntou: a conversa passava a
+    responder "entregue à equipa" para sempre, mesmo depois de o fornecedor
+    voltar, e a fila da equipa enchia-se de conversas cujo único conteúdo era
+    "oi". A nota fica gravada para quem abrir a conversa e para o registo, e o
+    cliente continua no nível 1.
+    """
+    return Message.objects.create(
+        conversation=conversation,
+        author=Message.Author.STAFF,
+        body=note,
+        is_internal=True,
+    )
