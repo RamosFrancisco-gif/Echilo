@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import os
+import secrets
 from decimal import Decimal
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management.base import BaseCommand
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from apps.core.images import solid_colour_jpeg
-from apps.core.management.utils import exige_desenvolvimento
+from apps.core.management.utils import (
+    NOME_DEMO_PASSWORD,
+    exige_desenvolvimento,
+    exige_permissao_explicita,
+)
 from apps.properties.models import (
     OwnerProfile,
     Property,
@@ -144,19 +150,58 @@ class Command(BaseCommand):
         parser.add_argument(
             "--flush",
             action="store_true",
-            help="Remove imóveis e contacts de demonstração antes de criar.",
+            help=(
+                "Apaga TODOS os imóveis antes de criar, e não só os de demonstração. "
+                "Recusado em produção."
+            ),
+        )
+        parser.add_argument(
+            "--permitir-producao",
+            action="store_true",
+            help=(
+                "Autoriza a escrita em produção. Sem esta flag o comando recusa-se "
+                "quando DEBUG está desligado."
+            ),
         )
 
     @transaction.atomic
     def handle(self, *args: object, **options: object) -> None:
         """Cria os dados e imprime um resumo do que ficou no catálogo."""
-        exige_desenvolvimento(debug=settings.DEBUG, comando="seed_demo")
+        exige_permissao_explicita(
+            debug=settings.DEBUG,
+            permitido=bool(options["permitir_producao"]),
+            comando="seed_demo",
+        )
+        em_producao = not settings.DEBUG
+        palavra = self._palavra_passe(em_producao=em_producao)
+
         if options["flush"]:
+            exige_desenvolvimento(debug=settings.DEBUG, comando="seed_demo --flush")
             self._flush()
 
-        curator = self._team_user("Carlos Pembele", "curador@echilo.ao", User.Role.CURATOR)
-        agent = self._team_user("Bruno Mateus", "agente@echilo.ao", User.Role.AGENT)
-        self._team_user("Ana Quissanga", "admin@echilo.ao", User.Role.ADMIN)
+        if em_producao:
+            self.stdout.write(
+                self.style.WARNING(
+                    "  ATENÇÃO: a semeadura está a escrever na base de produção."
+                )
+            )
+
+        curator = self._team_user(
+            "Carlos Pembele", "curador@echilo.ao", User.Role.CURATOR, palavra=palavra
+        )
+        agent = self._team_user(
+            "Bruno Mateus", "agente@echilo.ao", User.Role.AGENT, palavra=palavra
+        )
+        if em_producao:
+            # A administração de produção é de uma pessoa real, e criar a conta com
+            # uma palavra-passe que sai deste repositório é entregar-lhe a conta.
+            self.stdout.write(
+                "  produção: `admin@echilo.ao` não foi criado — a administração é de quem a nomeou"
+            )
+        else:
+            self._team_user(
+                "Ana Quissanga", "admin@echilo.ao", User.Role.ADMIN, palavra=palavra
+            )
 
         limit = int(options["limit"])
         created = 0
@@ -172,7 +217,12 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"{created} imóvel(is) publicado(s). Equipa: curador@echilo.ao, "
-                f"agente@echilo.ao, admin@echilo.ao (palavra-passe: {DEMO_PASSWORD})."
+                "agente@echilo.ao."
+                + (
+                    ""
+                    if em_producao
+                    else f" admin@echilo.ao (palavra-passe: {DEMO_PASSWORD})."
+                )
             )
         )
 
@@ -183,14 +233,39 @@ class Command(BaseCommand):
             if deleted:
                 self.stdout.write(f"  removidos {deleted} registos de {model.__name__}")
 
-    def _team_user(self, full_name: str, email: str, role: str) -> User:
+    def _palavra_passe(self, *, em_producao: bool) -> str:
+        """Dá a palavra-passe das contas de demonstração, sem a escrever no código.
+
+        Em desenvolvimento a constante serve: é o que permite repetir o comando sem
+        perder a sessão. Em produção seria uma chave no repositório, e o `admin@`
+        com password conhecida é administração completa do site vivo. Sem
+        `ECHILO_DEMO_PASSWORD` a senha é gerada e mostrada uma vez a quem semeou —
+        fora do código, e fora do `stdout` do comando.
+        """
+        if not em_producao:
+            return DEMO_PASSWORD
+        do_ambiente = os.environ.get(NOME_DEMO_PASSWORD, "").strip()
+        if do_ambiente:
+            return do_ambiente
+        gerada = secrets.token_urlsafe(18)
+        self.stderr.write(
+            self.style.WARNING(
+                f"{NOME_DEMO_PASSWORD} não estava definido: senha gerada para as "
+                f"contas de demonstração — {gerada}"
+            )
+        )
+        return gerada
+
+    def _team_user(
+        self, full_name: str, email: str, role: str, *, palavra: str
+    ) -> User:
         """Cria ou actualiza um membro da equipa com palavra-passe conhecida."""
         user, created = User.objects.get_or_create(
             email=email,
             defaults={"full_name": full_name, "phone": "+244 923 000 000", "role": role},
         )
         if created:
-            user.set_password(DEMO_PASSWORD)
+            user.set_password(palavra)
             user.save()
             self.stdout.write(f"  utilizador {email} ({role})")
         return user

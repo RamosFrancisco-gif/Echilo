@@ -18,6 +18,9 @@ from __future__ import annotations
 
 from django.core.management.base import CommandError
 
+#: Variável que dá a palavra-passe às contas de demonstração em produção.
+NOME_DEMO_PASSWORD = "ECHILO_DEMO_PASSWORD"
+
 
 def exige_desenvolvimento(*, debug: bool, comando: str) -> None:
     """Recusa o comando quando não está em desenvolvimento.
@@ -32,4 +35,27 @@ def exige_desenvolvimento(*, debug: bool, comando: str) -> None:
         f"`{comando}` só corre em desenvolvimento (DEBUG activo). "
         "Este comando escreve em disco e mexe na base de dados, e nenhum dos "
         "dois é seguro em produção. Ver a nota em AGENTS.md sobre a Vercel."
+    )
+
+
+def exige_permissao_explicita(*, debug: bool, permitido: bool, comando: str) -> None:
+    """Deixa um comando escrever em produção, mas só quando o operador o pede.
+
+    Há comandos que em produção são um erro (escrever em disco) e comandos que
+    em produção são uma decisão (semear um catálogo de demonstração). Tratar os
+    dois com o mesmo travão é o que obriga a desligar a protecção do primeiro
+    para usar o segundo.
+
+    A permissão é um argumento, e não a variável `DEBUG`: com `DEBUG` a deciding,
+    quem protege a base de produção desliga-a com um `set` e o travão deixa de
+    existir. Com um argumento, a decisão fica no comando que se executou, e quem
+    a viu é a consola.
+    """
+    if debug or permitido:
+        return
+    raise CommandError(
+        f"`{comando}` recusa-se a escrever em produção sem permissão explícita. "
+        "Se o catálogo de demonstração é mesmo o que queres em produção, "
+        f"passa `--permitir-producao`. Ver a nota em AGENTS.md sobre a Vercel: "
+        "a base de dados é a mesma para os previews e para a produção."
     )
