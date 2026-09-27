@@ -42,7 +42,7 @@ Antes de qualquer cadastro, a equipa recolhe e confirma:
 
 | Dado | Obrigatório | Notas |
 | --- | --- | --- |
-| Fotos do imóvel | Sim | Mínimo 5. Máx. 30. Primeira foto é a capa. |
+| Fotos do imóvel | Sim | Mínimo 5. Máx. 15. Primeira foto é a capa. |
 | Localização via satélite (mapa) | Sim | Ver §2.3. |
 | Preço | Sim | Em Kwanza. Ver §2.5. |
 | Tipo de contrato | Sim | `RENT` (arrendamento) ou `SALE` (venda). Ver §2.6. |
@@ -52,6 +52,37 @@ Antes de qualquer cadastro, a equipa recolhe e confirma:
 
 Um imóvel **não** avança para cadastro enquanto faltar qualquer um destes campos.
 A validação é feita por `PropertySubmission.is_ready_for_review()`.
+
+Os dois números vivem em `apps.properties.validators` (`MIN_FOTOS`, `MAX_FOTOS`)
+e não no texto que os repete. Estavam escritos em três sítios — a triagem, o
+formulário e o help text — e um tecto de 15 com 30 num deles não dá erro: dá
+três respostas diferentes à mesma pergunta.
+
+#### As fotografias entram todas de uma vez
+
+A equipa fotografa o imóvel inteiro antes de se sentar a carregar, e escolher um
+ficheiro, esperar e escolher o seguinte quinze vezes não é curadoria.
+
+- O input é `multiple` e o `name` é `images`. O `name` tem de ser o mesmo que o
+  campo do formulário: um `foto` contra um `image` não dá erro nenhum, dá
+  "campo obrigatório" para sempre. `test_o_input_da_ficha_tem_o_nome_que_o_
+  formulario_espera` trava isso.
+- O `accept` do input e o do formulário saem os dois de `MIME_IMAGEM_ACEITE`.
+  Escritos à mão, o input oferece um formato que o servidor recusa — e a pessoa
+  descobre-o depois de escolher o ficheiro.
+- A ordem de escolha é a ordem de escolha, e é ela que decide a capa. A
+  numeração é calculada uma vez em `add_images()` a partir do que já lá está.
+- **Um ficheiro mau não leva o lote consigo.** A validação é por ficheiro e a
+  vista diz quais entraram, quais foram recusados e porquê. Um "guardadas" que
+  não é verdade obriga a pessoa a procurar a fotografia que não gravou.
+- **O excesso diz-se, não ignora-se.** Escolher dezoito com três lá dentro
+  guarda três e avisa; recusar o lote inteiro obriga a contar o que já existia.
+- **O tecto tem de ser reversível.** Apagar uma fotografia renumera as
+  seguintes, promove a segunda a capa e apaga o ficheiro do storage com a
+  linha. Um tecto de 15 sem botão de apagar é um erro sem volta, e a ficha
+  anuncia o espaço que resta antes de a pessoa escolher os ficheiros.
+- Todo o lote vai numa transacção, e o `name` dos ficheiros é procurado, não o
+  `id`.
 
 #### Etapa 3 — Cadastro gerido
 
@@ -69,6 +100,42 @@ informações padronizadas e verificadas.
    `CHANGES_REQUESTED` nem `ARCHIVED`. Pode ainda restringir o catálogo a um
    raio desenhado no mapa (ver §2.12).
 2. **Atendimento híbrido (IA + equipa humana)** — descritos em §2.4.
+
+#### As fotografias da home rodam, as do catálogo não
+
+A secção "Imóveis publicados" da home mostra as fotografias de cada imóvel a
+trocar de 40 em 40 segundos. O catálogo **não** roda: lá a pessoa está a
+escolher entre doze imóveis, e uma fotografia que muda por baixo do texto que
+se está a ler é o oposto de ajudar.
+
+- **Só a capa é pedida de imediato.** As restantes levam `data-src` e o
+  JavaScript escreve o endereço na altura em que a imagem entra. Seis cartões
+  com quinze fotografias cada são noventa imagens: com `src` nas noventa, a
+  página pede noventa ficheiros de uma vez. É a diferença entre a home
+  aparecer e a home aparecer depois de a última fotografia carregar.
+- **A imagem seguinte é descodificada antes de a anterior desaparecer.**
+  Trocar o endereço e a opacidade no mesmo instante mostra metade de uma
+  fotografia, que se lê como erro e não como transição.
+- **Os cartões não rodam todos ao mesmo tempo.** O primeiro desvio é uma
+  fracção do intervalo e não uma constante solta, para que o primeiro a rodar
+  espere mesmo quarenta segundos.
+- **A rotação pára em três situações**: com o rato no cartão, com o foco lá
+  dentro, e quando o cartão não está à vista. Um temporizador a acordar de meio
+  em meio minuto para uma grelha abaixo da dobra é trabalho que se paga e não
+  se aproveita. Um separador em segundo plano também não.
+- **Quem pede menos movimento recebe a troca sem a dissolução.** A regra está
+  em CSS, que é onde o browser sabe melhor, e a rotação não é desligada: quem
+  pede menos movimento quer menos movimento, não menos fotografias.
+- **Só a fotografia activa é lida em voz alta.** Quinze imagens com o mesmo
+  texto alternativo são quinze repetições do título do imóvel; as restantes
+  levam `aria-hidden` e o JavaScript vai trocando isso com a imagem.
+- **O botão de paragem vem escondido no HTML** e é o JavaScript que o mostra.
+  Conteúdo que muda sozinho é WCAG 2.2.2, e um botão que não faz nada sem
+  JavaScript lê-se como uma falha da página.
+- O cartão recebe `photos=property.images.all` e **não** recebe
+  `cover_image=property.images.first`: o `.first()` corta o queryset e ignora o
+  `prefetch_related`, o que punia a home com uma consulta extra por imóvel para
+  descobrir o que a pilha de fotografias já sabia.
 
 ### 2.3 Localização via satélite (mapa)
 
@@ -88,6 +155,52 @@ divulgada após agendamento de visita.
 
 Para layouts de terreno, o imóvel tem também `land_area_m2` e, quando aplicável,
 `boundaries_geojson` (polígono).
+
+#### O pin é largado no mapa, e não escrito à mão
+
+Oito casas decimais num campo de texto é um erro de dedo à espera de acontecer, e
+o erro ia parar ao catálogo público. O inverso de §2.12: a equipa larga o pin, o
+cliente desenha o raio. Por isso `location_accuracy_m` continua a ser preenchido
+pela equipa — um clique no mapa não tem precisão, e fingir que tem é inventar o
+número que mede a fiabilidade da inspecção.
+
+- **O mapa escreve seis casas, a referência escreve quatro.** Os campos vão para
+  o `Decimal` e para a base de dados, e uma diferença de 0,0001° são pouco mais de
+  dez metros. A referência é o identificador legível do pin, e o exemplo do §2.3
+  tem quatro casas.
+- **O pin vem de três gestos diferentes, e o estado do pin é escrito pelo
+  servidor.** `setupPinPicker()` trata do clique, do arrasto e da
+  geolocalização; quem abre a ficha sem JavaScript lê em `#pin-estado` onde está o
+  imóvel, ou que ainda não há pin. Um mapa vazio sem frase ao lado não diz se
+  falta o mapa ou falta o pin.
+- **A precisão só se escreve quando o browser a sabe.** Vem da
+  `geolocation.accuracy`, ou não vem. Um clique não a tem.
+- **As setas movem o pin, e só quando já há pin.** Sem pin, o teclado continua a
+  deslocar a vista, que é o que o Leaflet faz. Inventar um pin a meio de Angola
+  por causa de uma seta é pior do que não fazer nada. Com `Shift` o passo é cinco
+  vezes maior.
+- **A recusa da permissão volta sempre ao caminho que não depende de ninguém**,
+  que aqui é carregar no mapa. `motivoDaRecusa(erro, alternativa)` é partilhada
+  com o catálogo e recebe a alternativa como argumento: desenhar um círculo num
+  mapa, carregar no chão no outro. Duas versões divergem, e a segunda é sempre a
+  que alguém não actualiza.
+- **A falha dos tiles e a recusa da permissão são caixas separadas**, por uma
+  razão que já custou uma pista errada ao catálogo: um 403 do fornecedor a
+  apagar a recusa mandava a equipa seguir o diagnóstico errado. A dos tiles é
+  `alert`; a da geolocalização é `status`, porque dois alertas ao mesmo tempo
+  fazem o leitor de ecrã ler a mensagem errada.
+- **Os campos são procurados pelo `name` e não pelo `id`.** O `id` é gerado pelo
+  Django e muda entre o cadastro e a edição, e um seletor que só funciona numa
+  das duas fichas é meia funcionalidade.
+- **A ficha interna altera os campos que mostra, e só esses.** `PropertyQuickEditForm`
+  não tem `status`, `reference`, `curated_by` nem nada que a página não desenha.
+  Um campo no formulário e fora da página é apagado em silêncio no primeiro save
+  — o que a ficha fazia antes, e o que o teste
+  `test_a_pagina_desenha_todos_os_campos_do_formulario` trava.
+- **O cromo do Leaflet é comum aos dois mapas** e vive sob `.echilo-map`; as
+  regras do círculo, dos popups e das etiquetas de município ficam no selector do
+  catálogo. Duas redações das mesmas regras de zoom divergem, e a segunda é a que
+  ninguém actualiza.
 
 ### 2.4 Atendimento híbrido
 
@@ -122,6 +235,61 @@ Assuntos que **sempre** escalam para a equipa:
 
 Uma conversa passa a `handled_by = HUMAN` e o `Conversation` fica com estado
 `ESCALATED`. O nível 1 continua disponível, mas já não responde sozinho.
+
+#### O motivo da escalação é da equipa, e a conversa é do cliente
+
+`escalate_conversation()` recebe duas coisas e não uma. O `reason` é o motivo
+técnico, e fica **interno**; o `notice` é a frase que o cliente lê, e é
+opcional.
+
+- **O motivo nunca é uma bolha da conversa.** Uma `Message` com `is_internal`
+  guarda-o para a equipa. Escrevê-lo como uma bolha normal punha "Erro técnico
+  no assistente." no ecrã de quem só queria saber a renda, e a equipa — que é
+  quem tem de agir com essa informação — não o via em lado nenhum, porque a fila
+  de contactos lista `Lead` e as conversas do assistente não são `Lead`.
+- **A exclusão é da consulta, e o partial tem uma guarda.** `recent_messages()` e
+  `messages_after()` filtram `is_internal=False`, e o template volta a filtrar.
+  Uma só das duas deixa o defeito à espera de alguém trocar a outra:
+  `test_uma_mensagem_interna_nunca_chega_ao_swap` mede as linhas devolvidas
+  precisamente porque o guard do template mascara a perda do filtro.
+- **O histórico enviado ao modelo também é filtrado.** Uma `STAFF` interna entra
+  no histórico como fala do assistente, e o modelo passava a responder a "o
+  cliente" com o texto escrito para a equipa.
+- **A conversa já escalada repete-se no histórico.** A segunda mensagem do cliente
+  numa conversa `ESCALATED` não volta ao modelo: grava o aviso, escala de novo e
+  devolve a mesma frase. Era a mesma frase escrita duas vezes — no `reason` e no
+  `answer` — e com o `reason` interno são dois registos com leitores diferentes.
+
+#### A conversa cresce; não volta a desenhar-se
+
+O HTMX **acrescenta** o turno novo ao fim de `#chat-body` (`hx-swap="beforeend"`)
+e o servidor responde só com o que ainda não foi visto. O formulário diz até onde
+o cliente já chegou, em `#ultima-mensagem`.
+
+- **Trocar o `innerHTML` inteiro encolhia a conversa a cada pergunta.** O
+  carregamento inicial desenhava 40 mensagens e a resposta do HTMX trazia as 6
+  últimas: cada turno substituía a conversa anterior pelas últimas seis, e as
+  bolhas antigas voltavam a animar. A janela que fica no ecrã é
+  `HISTORY_WINDOW`, e o que o modelo sabe é `MAX_TURNS`; com a janela menor que
+  o histórico, o ecrã cortava conversa que o próprio assistente ainda lembrava.
+- **O que se acrescenta é lido do DOM, não de um campo que o HTMX escreve.** Cada
+  bolha traz `data-message-id` e o JavaScript guarda o da última. Um campo
+  actualizado por nós e um lido pelo servidor divergem no primeiro turno em que
+  um dos dois falha.
+- **Um `after_message_id` em falta ou lixo volta a desenhar a janela.** Não é
+  duplicar o que já lá está nem ficar sem resposta, e um `int()` a levantar dava um
+  500 por causa de um campo de formulário.
+- **O fim da conversa tem de ficar à vista.** `#chat-body` tem `max-height` e scroll
+  próprio, e trocar o conteúdo fazia a scroll voltar ao topo: a resposta acabada de
+  chegar ficava fora da área visível. O scroll para o fundo corre no
+  `htmx:afterSwap` e no carregamento, para quem abre a página numa conversa longa.
+- **A saudação pertence ao primeiro render.** Com `beforeend` o parágrafo
+  `chat__empty` ficava no topo para sempre, a meio da conversa. O JavaScript
+  remove-o no primeiro acréscimo.
+- **O limite de perguntas diz o que aconteceu.** O 429 devolvia `notice` e o
+  template ignorava-o, redesenhando a saudação por cima: quem batia no limite
+  via "Em que posso ajudar?" e nenhuma explicação. Um apêndice vazio não escreve
+  nada.
 
 ### 2.5 Dinheiro
 
@@ -214,6 +382,58 @@ Regras:
   minúsculas são aceites. O formato, não o `max_length`, decide o que é válido.
 - As regras de negócio vivem nos validadores e no formulário. A view continua a
   ser apenas orquestração.
+
+#### O titular edita a própria identidade
+
+O NIF, a data de nascimento e o documento **editam-se** em `/conta/perfil/`. A
+âncora a uma pessoa real do §2.11 é o que o registo exige, e o registo não é a
+única porta de entrada: o titular corrige o próprio NIF mal escrito sem ter de
+esperar por uma equipa que pode não responder.
+
+- **O que continua a valer é o formato, não a locação.** `validate_nif`,
+  `normalize_nif` e `validate_adult` correm igual na edição, e a unicidade do NIF
+  é a mesma de duas contas com o mesmo número.
+- **Em branco é `None` e não `""`.** A coluna é `unique`, e a equipa não é
+  registrada com NIF (§3.2) logo a devolve a `NULL`. Um `""` colidia na segunda
+  conta sem NIF, e a falha aparecia como erro de base de dados.
+- **A consequência avisa no campo, e não se esconde.** O `help_text` do NIF diz
+  para avisar a equipa, porque um NIF corrigido deixa de bater certo com o
+  documento que a equipa já viu. A verificação continua a ser humana; o que
+  mudou é que o titular pode dizer que a refez.
+- **O `role` não se edita, e é a única coisa que fica de fora.** O §3 manda a
+  promoção para o painel, e um campo de perfil que aceita `ADMIN` escrito à mão
+  é uma escalada de privilégio com caixa de texto.
+
+#### A palavra-passe muda-se na página do perfil
+
+- **A palavra-passe de agora é obrigatória.** Sem ela, quem encontrasse a sessão
+  aberta trocava a palavra-passe da conta e ficava com ela.
+- **Trocar a senha não derruba a sessão de quem a trocou.** O hash da sessão do
+  Django é derivado da palavra-passe, e sem `update_session_auth_hash` a pessoa
+  era deitada fora da página que usou para a mudar.
+- **As duas mensagens do Django traduzem-se com o spread do dicionário.** As
+  chaves do `PasswordChangeForm` são `password_mismatch`, `password_in_help` e
+  `password_incorrect`; sobrescrever `error_messages` sem `**` apaga a terceira
+  e a senha errada dá `KeyError` em vez de mensagem.
+- **A regra de robustez é a do projecto, não a do Django.** `validate_password_strength`
+  recusa a senha que reproduz o nome ou o e-mail, como no registo e na recuperação.
+
+#### A página do perfil tem dois formulários, e as secções não são formulários
+
+Os dados, a identificação e a fotografia vivem no **mesmo** formulário, com um
+botão só. São três perguntas sobre a mesma conta, e dividi-las em três pedidos
+tornaria os campos dos outros dois obrigatórios em cada um deles.
+
+- **O que diz qual foi submetido é o nome do botão**, `alterar_senha`. Não é a
+  presença de um campo: um `POST` dos dados a esvaziar faria a senha ser validada
+  a partir de um formulário onde nem o campo existe.
+- **O `</form>` entre os campos é o que os separa**, e é isso que o teste mede —
+  não o número de `<form>` da página, que inclui o do menu e o do rodapé.
+- **Um erro de senha não marca os campos de dados.** A pessoa lê primeiro o que
+  está em cima, e seis campos vermelhos numa página em que só se errou a senha
+  mandam-na procurar o problema no sítio errado.
+- **O `width`/`height` do avatar seguem o tamanho pedido.** O `partial` aceita
+  `size`; fixo em 28, um avatar de 72 px reserva 28 e a página salta.
 
 ### 2.12 Pesquisa por área (cliente)
 
@@ -466,8 +686,8 @@ O mapa é uma melhoria progressiva, e o formulário não depende dele:
 | Perfil (`User.role`) | Pode | Não pode |
 | --- | --- | --- |
 | `CLIENT` | Navegar, guardar favoritos, pedir visita, enviar mensagem, fazer oferta | Criar imóveis, ver imóveis não publicados, moderar |
-| `CURATOR` | Tudo o que `CLIENT` faz + criar/editar imóveis, submeter a validação | Aprovar publicação final |
-| `AGENT` | Tudo o que `CURATOR` faz + validar documentos, confirmar visitas, responder conversas escaladas | Alterar permissões |
+| `CURATOR` | Tudo o que `CLIENT` faz + criar/editar imóveis, submeter a validação | Aprovar publicação final, criar contas |
+| `AGENT` | Tudo o que `CURATOR` faz + validar documentos, confirmar visitas, responder conversas escaladas | Alterar permissões, criar contas |
 | `ADMIN` | Tudo | — |
 
 Regras:
@@ -476,6 +696,78 @@ Regras:
 - Promoção de perfil é feita em `/admin` ou por `MANAGER_EMAILS` nas settings.
 - Nenhum `CLIENT` acede a `/admin`. Devolvir 403.
 - O `client_staff` não existe: um `CLIENT` autenticado é sempre `is_staff=False`.
+
+### 3.1 O menu é uma resposta ao perfil, e a página tem de concordar com ele
+
+Uma barra igual para toda a gente esconde o produto de quem trabalha nele, e um
+link escondido não é uma permissão: quem escreve o endereço à mão chega lá na
+mesma. As duas coisas são separadas e as duas são obrigatórias.
+
+- **A árvore vive em `apps.core.navigation`, não no template.** Cada entrada
+  declara com que perfil aparece, lida do mesmo sítio que a view usa. Dez `{% if %}`
+  no cabeçalho eram uma resposta que ninguém conseguia contar.
+- **As folhas são `MenuLink` e os ramos são `MenuGroup`.** Um ramo existe para ter
+  subentradas; uma folha tem destino, texto e o nome da view que a marca como
+  "está aqui".
+- **Os perfis são lidos das propriedades, não escritos à mão.** `can_curate` dá a
+  `CURATOR`, `AGENT` e `ADMIN`; `can_manage_users` dá só a `ADMIN`. Um curador que
+  registe outro curador é uma segunda chefia sem ninguém a nomear.
+- **`NoReverseMatch` esconde a entrada e não parte a página.** Um destino que não
+  existe é um destino que não aparece; o erro vê-se na ausência, que se pergunta,
+  e não num 500 no cabeçalho de todas as páginas.
+- **O menu e a vista têm de concordar, e há teste para as duas.** Esconder o link
+  é cortesia; a guarda na vista é a regra. As quatro páginas de contas devolvem
+  403 a visitante, a `CLIENT` e a `AGENT` — e o `admin@` local, que é `is_staff` e
+  não é superuser, entra, porque a gestão de contas é do produto e não do Django
+  admin.
+- **O ramo é um `<details>`, não um botão.** O teclado, o `aria-expanded` e o
+  abrir/fechar são do browser, e sem JavaScript o ramo continua a abrir. Um botão
+  com script que não chegou a ser escrito é um ramo que não abre, e ninguém
+  descobre se o erro é o menu ou a página.
+- **No telemóvel o ramo não desce: mostra o nome e as filhas em linha.** Um
+  submenu sobreposto a 208 px dentro de um menu da largura do ecrã é um menu com
+  ar de modal.
+- **Uma entrada por página pode dizer `aria-current`.** "Início" e "Como
+  funciona" apontam para a mesma `url_name`; as duas marcadas lêem-se como dois
+  "está aqui". A âncora da home fica com o `match` vazio por isso.
+- **O estado do dashboard é lido num método só.** `estado_activo()` é usado pelo
+  queryset e pelo contexto: se o queryset aceitasse um valor que a página não marca
+  como escolhido, um estado escrito à mão deixava o filtro sem "está aqui" e a
+  lista toda em baixo. O estado desconhecido é descartado por inteiro, como a área
+  na pesquisa (§2.12).
+- **A contagem por estado vem como lista de dicionários.** O template não faz
+  `contagens[valor]`, e escrever o número no HTML dava um filtro que anuncia 0 em
+  todos os estados.
+
+### 3.2 A administração cria contas, e a identidade continua obrigatória
+
+O cadastro de clientes e o de membros de equipa são dois formulários com
+destinos diferentes, e as listas são duas perguntas separadas.
+
+- **`ClientCreateForm` herda do formulário público e tira uma coisa só:** a caixa
+  dos termos. Quem responde por ela é a administração, que está a identificar a
+  pessoa à vista (§2.11). Tudo o resto — data de nascimento, NIF, documento,
+  telefone, validação de robustez — continua obrigatório, porque a identidade de
+  um cliente não fica menos válida por ter sido registada por outra pessoa. A
+  caixa dos termos sai com `terms_accepted = None`, que é o mecanismo do Django
+  para remover um campo herdado.
+- **O cadastro de membro não pede NIF nem data de nascimento.** A equipa interna
+  é identificada pelo e-mail e pela nomeação, e pedir um NIF a um curador seria
+  inventar uma obrigação que o §2.11 não tem.
+- **O `role` é uma escolha fechada de três valores.** `CLIENT` não está na lista
+  porque a equipa não se promove a si própria por engano, e `ChoiceField` recusa o
+  valor escrito à mão em vez de o aceitar em silêncio.
+- **As contas são montadas e guardadas como `register_client` faz, e não com
+  `create_user`.** O `User.save()` é quem deriva `is_team_member` e o acesso staff
+  a partir do perfil; um `create_user` que não passe por ele deixaria um agente
+  sem acesso ao painel.
+- **A palavra-passe é a que a pessoa vai usar, e diz-se isso na página.** Não há
+  e-mail de boas-vindas nem `must_change_password`, e a nota no formulário é o que
+  impede a administração de achar que a palavra-passe vai chegar a alguém sozinha.
+- **A lista de clientes procura por nome, e-mail, NIF e telefone.** A equipa tem o
+  NIF e o telefone à mão, e um filtro só por nome não é o filtro que se vai usar.
+  A pesquisa repete-se no campo, senão quem pesquisa tem de escrever tudo outra vez.
+
 
 ---
 
@@ -583,8 +875,61 @@ def get_published(*, purpose: Purpose, province: str | None = None) -> QuerySet[
   Não há SPA nem framework JS de UI.
 - Todo formulário tem `<label>` explícito. Acessibilidade é requisito, não extra.
 - Classes CSS de componente. Nenhum `style=` inline para layout.
-- `base.html` tem `head_extra` e `scripts` para os assets de uma página. Só o
-  catálogo carrega Leaflet; nenhum outro template paga por ele.
+- `base.html` tem `head_extra` e `scripts` para os assets de uma página. O
+  Leaflet é das duas páginas com mapa — o catálogo e as fichas de curadoria — e
+  de mais nenhuma; nenhuma outra paga por ele.
+
+#### A confirmação é do sistema, e não é a do browser
+
+Apagar uma fotografia, uma ficha ou uma conversa precisa de uma pergunta antes.
+A pergunta é a mesma em todas as páginas, e por isso é um componente: o `<dialog>`
+em `partials/confirmacao.html`, incluído uma vez no `base.html`.
+
+- **Não há `window.alert`, `window.confirm` nem `window.prompt`.** Não é
+  questão de gosto: um diálogo do browser não se deixa estilizar, é desenhado
+  pelo browser e não pela folha de estilos, e aparece como um quadrado cinzento
+  no meio de uma interface feita à mão. `ConfirmacaoModalTests
+  .test_nao_ha_dialogos_nativos_no_javascript` le todos os ficheiros de
+  `static/js/` e trava a regra; sem ele, um `confirm` num ficheiro novo
+  voltava a apagar imóveis sem a caixa aparecer.
+- **A acção destrutiva escreve os três textos.** `data-confirmar` é o aviso,
+  `data-confirmar-titulo` o título e `data-confirmar-ok` o botão. Com o aviso
+  só, a caixa escreve "Confirmar acção" e "Confirmar" por cima de um texto que
+  diz o que se perde, e um botão que não diz o que faz convida ao erro.
+- **A acção destrutiva nem sempre é um `<button>`.** A caixa de selecção que
+  remove a fotografia do perfil é um widget declarado em `apps.accounts.forms`,
+  e é por isso que os três atributos vivem no formulário: o `{{ field }}` do
+  partial não tem como saber que aquele campo apaga alguma coisa. Confirmar é o
+  `change` e o que a caixa decide é se a marca fica, porque o browser já a pôs
+  — `alvo.checked = confirmado` no `close`. Deixar a marca como estava depois
+  de escrever "Cancelar" confirmava em silêncio a remoção que dizia estar a
+  cancelar. O caminho do clique não toca em caixas de selecção, e o caminho
+  da selecção não repete o clique: um `preventDefault` do primeiro por cima
+  da marca do segundo dava um estado que ninguém pediu. Sem JavaScript ela
+  continua a funcionar, e a fotografia só some quando o formulário é
+  guardado.
+- **A regra é verificada nos dois sítios onde a acção pode nascer.**
+  `test_as_accoes_destrutivas_titulo_e_rotulo_proprios` varre os templates e
+  o seu par varre os `attrs` de widget: varrer só os templates deixava o caso
+  do formulário de fora da regra sem dar erro.
+- **O `<form method="dialog">` é o que dá `Esc`, `Enter` e o `returnValue`.** São
+  três campos de accessibility que de outra maneira seriam um `keydown` global a
+  disputar o foco com o resto da página.
+- **O botão de cancelar é o primeiro no DOM, e por isso é o que recebe o foco.**
+  O `showModal()` foca o primeiro elemento da caixa: quem abre com o teclado e
+  prime logo `Enter` não pode ter o botão que apaga a ficha debaixo do dedo.
+  Nenhum `order` de CSS resolve isto, porque foco não é desenho.
+- **O atributo `open` não serve.** Abre uma caixa que não é modal: sem
+  `::backdrop`, sem o resto da página inerte e sem foco preso dentro.
+- **Sem a caixa, o clique segue o seu curso.** O botão nasce no servidor e sem
+  JavaScript não há modal; bloquear aí não confirmava nada, tornava a acção
+  impossível e um `<dialog>` que não abre é uma caixa que engole o clique sem
+  explicar porquê.
+- **O clique que repete a acção não volta a pedir confirmação.** A marca em
+  memória — e não um atributo no DOM — é o que impede que `alvo.click()` passe
+  pelo mesmo delegado e se peça a si próprio.
+- **A entrada respeita `prefers-reduced-motion`**, como tudo o que se move
+  (§5.6).
 
 ### 5.6 Estados de carregamento
 
