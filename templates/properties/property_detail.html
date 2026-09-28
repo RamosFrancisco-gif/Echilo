@@ -2,7 +2,7 @@
 {% load echilo_format %}
 
 {% block title %}{{ property.title }} — {{ property.get_province_ref_display }} — Echilo{% endblock %}
-{% block description %}{{ property.title }} em {{ property.municipality }}, {{ property.get_province_ref_display }}. {{ property.price|kwanza }}. Imóvel verificado pela equipa Echilo.{% endblock %}
+{% block description %}{{ property.title }} em {{ property.municipality }}, {{ property.get_province_ref_display }}. {{ property.price|kwanza }}.{% if not documentos_em_falta %} Imóvel com a escritura e a identificação verificadas pela equipa Echilo.{% endif %}{% endblock %}
 
 {% block content %}
 <section class="section">
@@ -40,7 +40,9 @@
         <div class="chip-row mt-26">
           <span class="badge badge--warn">{% if property.purpose == 'RENT' %}Arrendar{% else %}Vender{% endif %}</span>
           <span class="badge badge--muted">{{ property.get_type_display }}</span>
-          <span class="badge badge--ok"><svg class="i t-xs" aria-hidden="t-xs"><use href="#shield"/></svg>Documentação verificada</span>
+          {% if not documentos_em_falta %}
+            <span class="badge badge--ok" title="A equipa confirmou a escritura e o documento de identificação do proprietário"><svg class="i t-xs" aria-hidden="t-xs"><use href="#shield"/></svg>Escritura e identificação verificadas</span>
+          {% endif %}
           {% if property.location_verified_at %}
             <span class="badge badge--ok"><svg class="i t-xs" aria-hidden="t-xs"><use href="#satellite"/></svg>Localização confirmada</span>
           {% endif %}

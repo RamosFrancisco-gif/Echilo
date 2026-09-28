@@ -184,7 +184,12 @@ class PropertyDetailView(DetailView):
         return PropertyQueryService.base_queryset()
 
     def get_context_data(self, **kwargs: object) -> dict[str, object]:
-        """Acrescenta capa, galeria e imóvel similar da mesma tipologia."""
+        """Acrescenta capa, galeria, imóvel similar e o que a curadoria verificou.
+
+        A lista de documentos em falta é calculada aqui e não no template: é uma
+        consulta, e a ficha pública é a página que a equipa abre para chgar ao
+        imóvel. O template só decide se escreve o selo, que é o que ele sabe fazer.
+        """
         context = super().get_context_data(**kwargs)
         prop: Property = context["property"]
         images = list(prop.images.all())
@@ -192,6 +197,7 @@ class PropertyDetailView(DetailView):
             {
                 "cover_image": images[0] if images else None,
                 "gallery": images,
+                "documentos_em_falta": prop.missing_verified_documents(),
                 "similar": PropertyQueryService.base_queryset()
                 .filter(type=prop.type, purpose=prop.purpose)
                 .exclude(pk=prop.pk)[:3],

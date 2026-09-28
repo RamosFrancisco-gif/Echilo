@@ -90,6 +90,13 @@ from apps.properties.validators import (
     ORCAMENTO_LOTE_MB,
 )
 
+# O texto do selo que a ficha pública escreve sobre a documentação verificada.
+# Vive aqui porque dois testes o procuram e o template não o expõe: sem esta
+# constante, cada teste escreveria a frase e uma alteração ao rótulo passaria a
+# falhar nos dois — que é a forma barulhenta de o mesmo rótulo estar em dois
+# sítios.
+SELO_DOCUMENTACAO = "Escritura e identificação verificadas"
+
 
 class PropertyPublicationTests(TestCase):
     """Só imóveis com documentação verificada e coordenadas confirmadas são publicados."""
@@ -145,6 +152,64 @@ class PropertyPublicationTests(TestCase):
 
         make_verified_documents(prop)
         self.assertEqual(prop.missing_verified_documents(), [])
+
+    def test_o_selo_da_ficha_nomeia_os_dois_documentos_do_portao(self) -> None:
+        """O selo diz o que foi verificado, e não «documentação».
+
+        «Documentação verificada» é uma afirmação mais larga do que a que o
+        sistema calcula: `REQUIRED_FOR_PUBLISHING` são a escritura e o documento
+        de identificação, e os outros quatro tipos aceites podem não existir. Um
+        imóvel com dois documentos verificados exibia o mesmo selo de um imóvel
+        com a pasta completa, e o selo é a única coisa que a ficha diz sobre a
+        curadoria quando o cliente não pergunta.
+        """
+        prop = self._property()
+        make_verified_documents(prop)
+
+        response = self.client.get(reverse("properties:property_detail", args=[prop.reference]))
+
+        self.assertContains(response, SELO_DOCUMENTACAO)
+        self.assertNotContains(response, "Documentação verificada")
+
+    def test_a_descricao_para_motores_ve_o_mesmo_que_o_selo(self) -> None:
+        """A descrição é a mesma afirmação noutro sítio, e há de cair com o selo.
+
+        A descrição é o que o motor de busca mostra a quem ainda não chegou à
+        ficha. Deixar a promessa na descrição depois de a tirar do selo é trocar a
+        prova de sítio: a mentira deixa de se ver e continua escrita.
+        """
+        prop = self._property()
+        make_verified_documents(prop)
+        url = reverse("properties:property_detail", args=[prop.reference])
+
+        self.assertContains(self.client.get(url), "verificadas pela equipa Echilo")
+
+        for doc in prop.documents.filter(status=PropertyDocument.Status.VERIFIED):
+            doc.status = PropertyDocument.Status.REJECTED
+            doc.rejection_reason = "Fotografia ilegível"
+            doc.save(update_fields=["status", "rejection_reason"])
+
+        self.assertNotContains(self.client.get(url), "verificadas pela equipa Echilo")
+
+    def test_o_selo_desaparece_quando_a_documentacao_deixa_de_estar_verificada(self) -> None:
+        """Publicar é um portão; o selo é uma leitura, e a leitura repete-se.
+
+        `transition_to(PUBLISHED)` é a única vez que a documentação é conferida. O
+        `/admin` do Django deixa editar uma `PropertyDocument` depois disso, e nada
+        volta a correr a regra: o imóvel fica no ar com o selo de sempre e um
+        documento recusado. Por isso o selo é calculado no momento de o desenhar.
+        """
+        prop = self._property()
+        make_verified_documents(prop)
+        url = reverse("properties:property_detail", args=[prop.reference])
+        self.assertContains(self.client.get(url), SELO_DOCUMENTACAO)
+
+        for doc in prop.documents.filter(status=PropertyDocument.Status.VERIFIED):
+            doc.status = PropertyDocument.Status.REJECTED
+            doc.rejection_reason = "Fotografia ilegível"
+            doc.save(update_fields=["status", "rejection_reason"])
+
+        self.assertNotContains(self.client.get(url), SELO_DOCUMENTACAO)
 
     def test_publication_requires_reason(self) -> None:
         """`PUBLISHED` e `ARCHIVED` exigem justificação (§2.8)."""

@@ -380,6 +380,25 @@ conformidade urbanística.
 Um imóvel não é `PUBLISHED` sem `ownership_title` e `id_document` em `VERIFIED`.
 Ver `Property.missing_verified_documents()`.
 
+#### O selo público diz os dois documentos, e é lido de cada vez
+
+A ficha pública escreve um selo sobre a documentação. Duas decisões, e as duas
+são sobre a mesma coisa: o que o selo **nomeia** e **quando** é escrito.
+
+- **O selo nomeia os dois, e não «documentação».** `REQUIRED_FOR_PUBLISHING` são a
+  escritura e o documento de identificação; os outros quatro tipos aceites podem
+  não existir. «Documentação verificada» é uma afirmação mais larga do que a que o
+  sistema calcula, e o selo é a única coisa que a ficha diz sobre a curadoria
+  quando o cliente não pergunta.
+- **O selo é calculado ao desenhar, não gravado.** `transition_to(PUBLISHED)` é a
+  única vez que a documentação é conferida, e o `/admin` do Django deixa editar uma
+  `PropertyDocument` depois disso. Um selo escrito na ficha no momento da
+  publicação continua lá com um documento recusado por baixo.
+
+A descrição para motores de busca repete a mesma frase, e cai com o selo.
+Deixar a promessa na descrição depois de a tirar do selo é trocar a prova de
+sítio: a mentira deixa de se ver e continua escrita.
+
 ### 2.8 Ciclo de vida do imóvel
 
 ```
