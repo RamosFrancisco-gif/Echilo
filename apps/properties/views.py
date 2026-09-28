@@ -232,8 +232,12 @@ class CuratorDashboardView(ListView):
         return pedido if pedido in Property.Status.values else ""
 
     def get_queryset(self) -> QuerySet[Property]:
-        """Filtra pelo estado pedido, e mostra o raso quando não há filtro."""
-        base = Property.objects.select_related("curated_by").order_by("-created_at")
+        """Filtra pelo estado pedido, e mostra o raso quando não há filtro.
+
+        O `-id` no fim é o desempate: a fila da equipa é paginada, e dois imóveis
+        registados no mesmo instante trocam de lugar entre páginas sem ele.
+        """
+        base = Property.objects.select_related("curated_by").order_by("-created_at", "-id")
         estado = self.estado_activo()
         if estado:
             base = base.filter(status=estado)
@@ -452,9 +456,31 @@ class CuratorPropertyDetailView(FormView):
         )
         return context
 
-    def form_valid(self, form: PropertyQuickEditForm) -> HttpResponseRedirect:
+    def form_valid(self, form: PropertyQuickEditForm) -> HttpResponse:
         """Actualiza os campos do imóvel sem sair do fluxo de estados auditado."""
-        prop = apply_quick_edit(self.get_object(), form.property_fields())
+        alvo = self.get_object()
+        verificada = alvo.location_verified_at
+        try:
+            prop = apply_quick_edit(
+                alvo,
+                form.property_fields(),
+                localizacao_confirmada=form.confirmou_localizacao(),
+            )
+        except ValidationError as erro:
+            # O serviço recusa gravar quando a mudança é incoerente, e a página
+            # tem de mostrar porquê com os valores que a pessoa escreveu. Sem isto
+            # a excepção subia e a edição respondia 500.
+            form.add_error(None, erro)
+            return self.form_invalid(form)
+        # Perder a confirmação sem que nada se publique é um efeito que a pessoa
+        # não pediu e não vê na ficha: o imóvel sai publicado de hoje para
+        # amanhã, e o motivo só aparece quando a publicação é recusada.
+        if verificada and not prop.location_verified_at:
+            messages.warning(
+                self.request,
+                _("O pin mudou, por isso o imóvel deixou de ter a localização "
+                  "verificada e já não pode ser publicado sem nova confirmação."),
+            )
         messages.success(self.request, _("Dados do imóvel actualizados."))
         return HttpResponseRedirect(
             reverse("properties:curator_detail", args=[prop.reference])

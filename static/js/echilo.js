@@ -2010,11 +2010,23 @@
     if (!formularios.length) return;
 
     Array.prototype.forEach.call(formularios, function (form) {
-      var input = form.querySelector('input[type="file"][name="images"]');
+      // O `name` vem do formulário porque este redutor não é só das fotografias
+      // dos imóveis: o retrato do perfil reduz-se com a mesma política, e o campo
+      // chama-se `photo`. Um nome escrito aqui transformava o retrato num
+      // ficheiro que entrava sem ser reduzido — que é um 413 à espera, e um 413
+      // que o formulário aceitaria porque o limite de validação é outro.
+      var nomeInput = form.getAttribute('data-input-ficheiros') || 'images';
+      var input = form.querySelector('input[type="file"][name="' + nomeInput + '"]');
       if (!input) return;
       var orcamento = mbParaBytes(parseFloat(form.getAttribute('data-orcamento-mb')) || 0);
       var ladoMaximo = parseInt(form.getAttribute('data-lado-maximo'), 10) || 0;
       if (!orcamento) return;
+      // Um ficheiro só diz-se ao singular. «As 1 fotografias ainda somam» é uma
+      // frase que se lê como defeito, e é a que a pessoa que vai ver a fotografia
+      // de perfil do primeiro perfil do sítio vai ler.
+      var plural = form.getAttribute('data-nome-plural') || 'fotografias';
+      var singular = form.getAttribute('data-nome-singular')
+        || plural.replace(/s$/, '');
       var aTratar = false;
 
       form.addEventListener('submit', function (evento) {
@@ -2043,13 +2055,17 @@
         var usados = {};
         var reduzidos = [];
         var indice = 0;
+        var umSo = ficheiros.length === 1;
+        var nomeFicheiro = umSo ? singular : plural;
 
         function proximo() {
           if (indice >= ficheiros.length) return Promise.resolve();
           var original = ficheiros[indice];
           indice += 1;
-          estado.dizer('A reduzir as fotografias: ' + indice + ' de '
-            + ficheiros.length + '.');
+          estado.dizer(umSo
+            ? 'A reduzir a ' + nomeFicheiro + '…'
+            : 'A reduzir as ' + nomeFicheiro + ': ' + indice + ' de '
+              + ficheiros.length + '.');
           return reencodar(original, porFicheiro, ladoMaximo).then(function (saida) {
             reduzidos.push(saida === original
               ? original
@@ -2070,19 +2086,28 @@
           aTratar = false;
           if (final > orcamento) {
             if (botao) botao.disabled = false;
-            estado.terminar('As ' + reduzidos.length + ' fotografias ainda somam '
-              + mbLegivel(final) + ' e o envio aceita ' + mbLegivel(orcamento)
-              + '. Escolha menos fotografias, ou menos de cada vez.', true);
+            estado.terminar(umSo
+              ? 'A ' + nomeFicheiro + ' ainda tem ' + mbLegivel(final)
+                + ' e o envio aceita ' + mbLegivel(orcamento)
+                + '. Escolha uma imagem mais leve.'
+              : 'As ' + reduzidos.length + ' ' + nomeFicheiro + ' ainda somam '
+                + mbLegivel(final) + ' e o envio aceita ' + mbLegivel(orcamento)
+                + '. Escolha menos fotografias, ou menos de cada vez.', true);
             return;
           }
           if (!substituirFicheiros(input, reduzidos)) {
             if (botao) botao.disabled = false;
-            estado.terminar('Este navegador não deixa trocar as fotografias escolhidas. '
-              + 'Carregue menos de cada vez.', true);
+            estado.terminar('Este navegador não deixa trocar as '
+              + nomeFicheiro + ' escolhidas. Carregue menos de cada vez.', true);
             return;
           }
-          estado.terminar('Fotografias reduzidas de ' + mbLegivel(total) + ' para '
-            + mbLegivel(final) + '. A enviar…');
+          estado.terminar(umSo
+            ? nomeFicheiro.charAt(0).toUpperCase() + nomeFicheiro.slice(1)
+              + ' reduzida de ' + mbLegivel(total) + ' para ' + mbLegivel(final)
+              + '. A enviar…'
+            : nomeFicheiro.charAt(0).toUpperCase() + nomeFicheiro.slice(1)
+              + ' reduzidas de ' + mbLegivel(total) + ' para ' + mbLegivel(final)
+              + '. A enviar…');
           form.submit();
         });
       });

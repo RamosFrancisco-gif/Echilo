@@ -10,9 +10,10 @@ from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
 from apps.core.forms import BaseStyledForm, BaseStyledModelForm
-from apps.core.images import motivo_recusa_imagem
-from apps.core.storage import MIME_IMAGEM_ACEITE
+from apps.core.images import motivo_recusa_imagem, prepara_retrato
+from apps.core.storage import LADO_RETRATO_PX, MIME_IMAGEM_ACEITE
 from apps.core.validators import (
+    LIMITE_UPLOAD_MB,
     normalize_nif,
     validate_adult,
     validate_angolan_phone,
@@ -24,11 +25,27 @@ from .services import PASSWORD_RESET_NEUTRAL_MESSAGE, validate_password_strength
 
 User = get_user_model()
 
-# Um retrato é uma imagem pequena mostrada a 40 px em todas as páginas. O tecto é
-# o do envio de ficheiros do §7 e vive aqui, e não no texto do `help_text` que o
+# Um retrato é uma imagem pequena mostrada a 28 px em todas as páginas. O tecto é
+# o do envio de ficheiros e vive aqui, e não no texto do `help_text` que o
 # repete: um tecto escrito em dois sítios é duas respostas à mesma pergunta.
-LIMITE_FOTO_PERFIL_MB = 5
-LADO_MAXIMO_FOTO_PERFIL = 2000
+#
+# O limite é do que entra, não do que fica. O que fica tem `LADO_RETRATO_PX` e sai
+# com um quarto de megabyte; este número diz o que se pode chegar a enviar.
+#
+# Não é o `5` do `§7`: esse é o `DATA_UPLOAD_MAX_MEMORY_SIZE` do Django, e é maior
+# do que a plataforma aceita. Quem manda é a Vercel, que recusa o pedido na edge
+# aos 4,5 MB — antes de o Django ver a requisição, e portanto antes de esta
+# validação ter ordem para disparar. Um retrato de 5 MB num `POST` sem JavaScript
+# é um «Content Too Large» sem página, e a validação que o recusaria nunca correu.
+# O número vem de `LIMITE_UPLOAD_MB`, que é o mesmo que o lote dos imóveis usa.
+LIMITE_FOTO_PERFIL_MB = LIMITE_UPLOAD_MB
+
+# O lado deixou de ser motivo de recusa. Uma fotografia de 4000 px de um telemóvel
+# não é uma fotografia má, é uma fotografia que se reduz, e recusá-la por causa dos
+# pixels mandava a pessoa tirar uma fotografia pior ao retrato. O que fica é um
+# tecto de sanidade contra a imagem que ocupa memória antes de ser lida, e é o
+# mesmo que as fotografias dos imóveis aceitam.
+LADO_MAXIMO_RETRATO_ENTRADA = 8000
 
 
 class ClientRegistrationForm(BaseStyledForm):
@@ -262,10 +279,6 @@ class ProfileForm(BaseStyledModelForm):
         ),
     )
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        self.foto_recusada: str | None = None
-        super().__init__(*args, **kwargs)
-
     class Meta:
         model = User
         # `role` e `is_staff` ficam de fora por §3, e a fotografia é o único campo
@@ -320,22 +333,33 @@ class ProfileForm(BaseStyledModelForm):
         return self.files.get(self.add_prefix("photo"))
 
     def clean_photo(self) -> object | None:
-        """Valida o retrato escolhido agora com Pillow, e não pelo cabeçalho.
+        """Valida o retrato com Pillow, e reduz-o ao que a interface pede.
 
         O `ImageField` aceita um executável renomeado a `.jpg`, e o retrato é a
         imagem que o browser vai buscar em todas as páginas depois disso.
+
+        Reduzir é a outra metade do §6, e a que não é só validação: «nunca servir
+        ficheiros enviados pelo utilizador tal como vieram». O que a pessoa escolhe
+        é um JPEG de quatro megabytes com a orientação da câmara; o que fica é um
+        quadrado de 512 px que o cabeçalho mostra a 28. Deixar o ficheiro como veio
+        custava três vezes o peso, para uma imagem que ninguém vê a essa tamanho.
         """
-        if self._novo_retrato() is None:
+        escolhido = self._novo_retrato()
+        if escolhido is None:
             return self.cleaned_data.get("photo")
         motivo = motivo_recusa_imagem(
-            self._novo_retrato(),
+            escolhido,
             limite_mb=LIMITE_FOTO_PERFIL_MB,
-            lado_maximo=LADO_MAXIMO_FOTO_PERFIL,
+            lado_maximo=LADO_MAXIMO_RETRATO_ENTRADA,
         )
         if motivo is not None:
-            self.foto_recusada = motivo
             raise ValidationError(motivo)
-        return self.cleaned_data.get("photo")
+        reduzido = prepara_retrato(escolhido, lado=LADO_RETRATO_PX)
+        # Substituir o valor limpo, e não o ficheiro do `files`: é o `cleaned_data`
+        # que o `construct_instance` lê, e escrever no `files` deixaria a imagem
+        # original a ser a que o `ImageField` valida a seguir.
+        self.cleaned_data["photo"] = reduzido
+        return reduzido
 
     def clean(self) -> dict[str, object]:
         """Recusa trocar e remover ao mesmo tempo, que é uma intenção só.
@@ -378,13 +402,29 @@ class ProfileForm(BaseStyledModelForm):
                 self._apagar_ficheiro(antigo)
         return user
 
-    @staticmethod
-    def _apagar_ficheiro(nome: str) -> None:
-        """Apaga o retrato que ficou para trás, sem tocar em mais nada."""
-        from django.core.files.storage import default_storage
+    def _apagar_ficheiro(self, nome: str) -> None:
+        """Apaga o retrato que ficou para trás, pela storage que o guardou.
+
+        A storage vem do **campo do modelo**, e nem do `default_storage` nem do
+        `self.fields["photo"]`. O `default_storage` é o backend das capas
+        (`echilo/imoveis`) e o retrato vive em `echilo/perfis`; e o
+        `forms.ImageField` deste formulário não tem atributo `storage` nenhum, que
+        foi o que um `except Exception` engoliu em silêncio durante a revisão: o
+        retrato anterior deixava de ser apagado e nada dizia porquê.
+
+        O campo do modelo é quem escreve o ficheiro e é quem o apaga. Os `except`
+        apanham o que a rede pode falhar ao apagar, que é a única coisa que
+        justifies uma excepção aqui — e um `AttributeError` volta a aparecer, que
+        é o que se quer.
+        """
+        from django.core.files.storage import Storage
 
         try:
-            default_storage.delete(nome)
+            storage: Storage = User._meta.get_field("photo").storage
+        except (AttributeError, LookupError):  # pragma: no cover - o campo existe
+            return
+        try:
+            storage.delete(nome)
         except Exception:  # pragma: no cover - limpar nunca é caminho crítico
             pass
 

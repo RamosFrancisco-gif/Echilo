@@ -2,28 +2,54 @@
 
 from __future__ import annotations
 
-import re
+import io
 import os
+import re
+import tempfile
 from datetime import date, timedelta
+from pathlib import Path
+from unittest import mock
 from urllib.parse import urlparse
 
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
+from django.core.files.storage import FileSystemStorage, default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
 
 from apps.accounts.forms import LIMITE_FOTO_PERFIL_MB
 from apps.core.pagination import PAGINA_PADRAO
+from apps.core.permissions import is_team_member
+from apps.core.storage import (
+    LADO_RETRATO_PX,
+    CloudinaryAvatarStorage,
+    storage_perfis,
+)
 from apps.core.testing import jpeg_bytes, make_user, select_options
 from apps.core.validators import normalize_nif
 from apps.properties.reference import ANGOLA_PROVINCES
+from apps.properties.validators import (
+    ORCAMENTO_PERFIL_MB,
+    config_perfil,
+)
 
 User = get_user_model()
 
 PASSWORD = "Tchapo-forte-2026"
+
+# A mesma credencial dos testes da storage: uma storage da Cloudinary recusa
+# arrancar sem `CLOUDINARY_URL`, e um teste que constrói uma tem de lha dar.
+CREDENCIAL = "cloudinary://123456789012345:abcdefghijklmnopqrstuvwxyz123456@echiloteste"
+
+APENAS_NUVEM = override_settings(
+    CLOUDINARY_URL=CREDENCIAL,
+    CLOUDINARY_PUBLICAO=True,
+    MEDIA_PERFIS_BACKEND="apps.core.storage.CloudinaryAvatarStorage",
+)
 
 
 class RateLimitFreeTestCase(TestCase):
@@ -339,6 +365,56 @@ class ProfilePermissionTests(RateLimitFreeTestCase):
         cliente = make_user(email="so-cliente@echilo.ao")
         self.assertFalse(cliente.can_curate)
         self.assertFalse(cliente.can_manage_users)
+
+    def test_um_perfil_que_nada_lhe_oferece_a_equipa_nao_entra(self) -> None:
+        """Um perfil novo não entra na equipa por existir.
+
+        A regra é uma lista branca, `is_team_role`, e é o que o `save()`, a guarda
+        e o menu leem. Isto fixa o motivo de ser uma lista: com `role != CLIENT` um
+        valor novo escrito no `Role` — o `OWNER` do portal do proprietário, por
+        exemplo — entrava como equipa sem uma linha de código ser revista, e o
+        próprio `save()` gravava isso na conta. A armadilha não dava erro, e o
+        primeiro sinal era um proprietário dentro da curadoria.
+        """
+        # Um valor fora do `Role` é o que o `TextChoices` ainda não conhece, e é
+        # também o que a regra tem de recusar: `choices` não valida no `save()`.
+        for perfil in (User.Role.CLIENT, "TERCEIRO", "", "owner"):
+            with self.subTest(perfil=perfil):
+                user = make_user(email=f"{perfil or 'vazio'}@echilo.ao")
+                user.role = perfil
+                user.save()
+
+                self.assertFalse(user.is_team_role)
+                self.assertFalse(user.is_team_member)
+                self.assertFalse(is_team_member(user))
+
+        for perfil in (User.Role.CURATOR, User.Role.AGENT, User.Role.ADMIN):
+            with self.subTest(perfil=perfil):
+                user = make_user(role=perfil, email=f"equipa-{perfil.lower()}@echilo.ao")
+                self.assertTrue(user.is_team_role)
+                self.assertTrue(user.is_team_member)
+                self.assertTrue(is_team_member(user))
+
+    def test_a_equipa_e_um_perfil_dos_que_curam_e_um_que_administra(self) -> None:
+        """Cada perfil da equipa fica dentro do produto, e o cliente fora dele.
+
+        Três sítios respondem a "é da equipa": o `save()` que grava o campo, a
+        guarda das views e o contexto dos templates. Se divergissem, a entrada do
+        menu apareceria a quem a página recusa, ou o contrário. Ler a mesma
+        propriedade nos três é o que impede a segunda resposta.
+        """
+        cliente = make_user(email="fora@echilo.ao")
+        self.assertEqual(
+            [cliente.is_team_member, is_team_member(cliente), cliente.can_curate],
+            [False, False, False],
+        )
+        for perfil in (User.Role.CURATOR, User.Role.AGENT, User.Role.ADMIN):
+            with self.subTest(perfil=perfil):
+                user = make_user(role=perfil, email=f"dentro-{perfil.lower()}@echilo.ao")
+                self.assertEqual(
+                    [user.is_team_member, is_team_member(user), user.can_curate],
+                    [True, True, True],
+                )
 
 
 class PerfilDaContaTests(RateLimitFreeTestCase):
@@ -758,6 +834,277 @@ class PerfilDaContaTests(RateLimitFreeTestCase):
         self.assertEqual(resposta.status_code, 302)
         agente.refresh_from_db()
         self.assertEqual(agente.phone, "+244 912 000 111")
+
+
+class RetratoNaNuvemTests(RateLimitFreeTestCase):
+    """O retrato vai para a Cloudinary, pequeno, e nunca como a pessoa o enviou.
+
+    Estas são as três garantias que o §6 pede para qualquer imagem e que o campo
+    `photo` cumpria só pela metade: ia para a pasta das capas, guardava-se aos
+    2000 px, e recusava uma fotografia boa por ter lados a mais.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.user = make_user(email="ana@echilo.ao", full_name="Ana Maria dos Santos")
+        self.client.force_login(self.user)
+        self.url = reverse("accounts:profile")
+        self.media = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media.cleanup)
+        self.override = override_settings(MEDIA_ROOT=self.media.name)
+        self.override.enable()
+        self.addCleanup(self.override.disable)
+
+    @staticmethod
+    def _grande(lado: int = 2600, altura: int = 1950) -> SimpleUploadedFile:
+        """Uma fotografia de telemóvel: lado grande e um ficheiro de vários megabytes.
+
+        O conteúdo é ruído, e não uma cor lisa: um JPEG de uma cor só tem 190 KB
+        mesmo com 4000 px de lado, e um teste que compara o tamanho do que entra
+        com o do que fica passava a medir a compressão de uma cor só.
+
+        Os 2600 px são de propósito: passam do tecto antigo de 2000 que esta
+        fotografia chumbava, e ficam dentro dos 4 MB que o formulário aceita.
+        Ruído a 4000 px dá 12 MB, que o tecto recusa — e recusa bem, porque esse
+        é um ficheiro que não devia ir num pedido de um retrato.
+        """
+        ruido = Image.effect_noise((lado, altura), 120).convert("RGB")
+        buffer = io.BytesIO()
+        ruido.save(buffer, "JPEG", quality=80)
+        return SimpleUploadedFile(
+            "telemovel.jpg", buffer.getvalue(), content_type="image/jpeg"
+        )
+
+    def _dados(self) -> dict[str, str]:
+        return {
+            "full_name": self.user.full_name,
+            "email": self.user.email,
+            "nif": "009671373HA093",
+            "birth_date": "1990-04-02",
+            "id_document_type": "BI",
+            "id_document_number": "004512389LA041",
+        }
+
+    def _guarda(self, ficheiro: SimpleUploadedFile) -> None:
+        resposta = self.client.post(self.url, {**self._dados(), "photo": ficheiro})
+        self.assertEqual(resposta.status_code, 302)
+        self.user.refresh_from_db()
+
+    def test_o_retrato_trocado_apaga_se_pela_storage_que_o_guardou(self) -> None:
+        """A pasta dos retratos não é a das capas, e apagar pela errada é apagar em vão.
+
+        O `default_storage` é o backend das capas. O retrato vive em `echilo/perfis`,
+        e apagar pelo `default_storage` só acertava porque o `destroy` da Cloudinary
+        leva o `public_id` com a pasta dentro. Um `MEDIA_PERFIS_BACKEND` apontado
+        para outra conta apaga na conta errada, e o `except` engolia a resposta.
+        """
+        self._guarda(self._grande())
+        antigo = self.user.photo.name
+
+        apagados: list[str] = []
+        storage_do_campo = User._meta.get_field("photo").storage
+        with mock.patch.object(storage_do_campo, "delete", side_effect=apagados.append):
+            self._guarda(self._grande())
+
+        self.assertEqual(apagados, [antigo], "o retrato anterior não foi apagado")
+
+    def test_apagar_o_retrato_não_passa_pela_storage_das_capas(self) -> None:
+        """O `default_storage` não é a storage do campo, e o teste diz isso."""
+        self._guarda(self._grande())
+
+        with mock.patch.object(default_storage, "delete") as errado:
+            self._guarda(self._grande())
+
+        errado.assert_not_called()
+
+    def test_uma_fotografia_de_telemóvel_é_aceite(self) -> None:
+        """O lado deixou de ser motivo de recusa: reduz-se, e recusa-se por escrever.
+
+        Uma fotografia de 2600 px é uma boa fotografia. O código antigo recusava-a
+        com «tem mais de 2000 px de lado», e a pessoa ficava sem retrato por causa
+        da câmara, não por causa do retrato.
+        """
+        self._guarda(self._grande())
+
+        self.assertTrue(self.user.photo)
+
+    def test_o_que_fica_guardado_e_quadrado_e_pequeno(self) -> None:
+        """É o que o cabeçalho mostra a 28 px, e cabe no orçamento que o browser recebeu.
+
+        A comparação que interessa não é com um rácio bonito, é com o número que o
+        `data-orcamento-mb` vai dizer à pessoa: o que fica guardado tem de caber
+        nesse meio megabyte, senão o browser reduziu e o servidor não.
+        """
+        entrada = self._grande()
+        tamanho_entrada = len(entrada.file.getvalue())
+        self._guarda(entrada)
+
+        with Image.open(self.user.photo.path) as guardada:
+            self.assertEqual(guardada.size, (LADO_RETRATO_PX, LADO_RETRATO_PX))
+            self.assertEqual(guardada.format, "JPEG")
+            self.assertEqual(guardada.mode, "RGB")
+        self.assertGreater(tamanho_entrada, 1_000_000, "o retrato de teste não é grande")
+        self.assertLess(
+            os.path.getsize(self.user.photo.path),
+            int(ORCAMENTO_PERFIL_MB * 1024 * 1024),
+            "o que ficou guardado não cabe no orçamento que o redutor recebeu",
+        )
+    def test_o_nome_guardado_diz_jpeg(self) -> None:
+        """A storage procura o ficheiro pelo nome, e um PNG com bytes JPEG não abre."""
+        self._guarda(self._grande())
+
+        self.assertTrue(self.user.photo.name.endswith(".jpg"))
+
+    def test_um_retrato_pequeno_não_e_ampliado(self) -> None:
+        """Ampliar não traz a fotografia que não está lá, só a mesma interpolação.
+
+        Este teste afirmava `(200, 200)` para uma entrada de 200×100, e por isso
+        fixava o defeito em vez de o travar: `ImageOps.fit` cobre o quadrado pedido
+        e por isso amplia. A propriedade que interessa é que nenhuma dimensão
+        ultrapasse a que a fotografia tinha.
+        """
+        buffer = io.BytesIO()
+        Image.new("RGB", (200, 100), (10, 20, 30)).save(buffer, "JPEG")
+        self._guarda(SimpleUploadedFile("pequeno.jpg", buffer.getvalue(), "image/jpeg"))
+
+        with Image.open(self.user.photo.path) as guardada:
+            self.assertEqual(guardada.size, (100, 100), "ampliar o lado curto não devolve a fotografia")
+            self.assertLessEqual(guardada.size[0], 200)
+            self.assertLessEqual(guardada.size[1], 100)
+
+    def test_nenhum_retrato_sai_maior_do_que_entrou(self) -> None:
+        """A propriedade vale para todas as formas, e não para uma só."""
+        for entrada, esperado in (((4000, 3000), (512, 512)), ((600, 600), (512, 512))):
+            with self.subTest(entrada=entrada):
+                buffer = io.BytesIO()
+                Image.new("RGB", entrada, (10, 20, 30)).save(buffer, "JPEG")
+                self._guarda(SimpleUploadedFile("x.jpg", buffer.getvalue(), "image/jpeg"))
+
+                with Image.open(self.user.photo.path) as guardada:
+                    self.assertEqual(guardada.size, esperado)
+                    self.assertLessEqual(max(guardada.size), max(entrada))
+
+    def test_a_orientação_da_câmara_é_corrigida(self) -> None:
+        """Um retrato deitado de lado é deitado pelo EXIF, e ninguém o endireita."""
+        buffer = io.BytesIO()
+        imagem = Image.new("RGB", (3000, 2000), (200, 40, 40))
+        # A orientação 6 é "rodar 90° para a direita", que é o que a câmara de um
+        # telemóvel deitada escreve. A imagem guarda-se deitada para a orientação
+        # ter efeito: é assim que a câmara a produz, e não o contrário.
+        exif = imagem.getexif()
+        exif[0x0112] = 6
+        imagem.save(buffer, "JPEG", exif=exif)
+
+        self._guarda(SimpleUploadedFile("deitado.jpg", buffer.getvalue(), "image/jpeg"))
+
+        with Image.open(self.user.photo.path) as guardada:
+            largura, altura = guardada.size
+            self.assertEqual(largura, altura, "o retrato tem de sair quadrado depois do EXIF")
+
+    def test_a_pasta_dos_retratos_não_é_a_das_capas(self) -> None:
+        """Sem pasta própria, um retrato vai para `echilo/imoveis` e segue as capas."""
+        with APENAS_NUVEM:
+            storage = CloudinaryAvatarStorage()
+
+            self.assertEqual(storage.pasta, "echilo/perfis")
+            self.assertEqual(storage.transformacao["crop"], "fill")
+            self.assertEqual(storage.transformacao["gravity"], "face")
+            self.assertEqual(storage.transformacao["width"], LADO_RETRATO_PX)
+            self.assertEqual(storage.transformacao["height"], LADO_RETRATO_PX)
+
+    def test_a_transparência_vira_branco_e_não_preto(self) -> None:
+        """O JPEG não tem alfa, e o que era transparente saía preto sem o fundo."""
+        buffer = io.BytesIO()
+        Image.new("RGBA", (800, 800), (0, 0, 0, 0)).save(buffer, "PNG")
+        self._guarda(SimpleUploadedFile("recorte.png", buffer.getvalue(), "image/png"))
+
+        with Image.open(self.user.photo.path) as guardada:
+            self.assertEqual(guardada.mode, "RGB")
+            # `getextrema` devolve uma faixa por canal, e é o mínimo de todas que
+            # diz se a imagem ficou preta.
+            mais_escuro = min(pior for pior, _ in guardada.getextrema())
+            self.assertGreater(mais_escuro, 200)
+
+    def test_o_formulário_publica_o_orçamento_do_retrato(self) -> None:
+        """O `data-` é o contrato entre o Python e o redutor do browser.
+
+        Sem o `data-orcamento-mb` não há redução nenhuma, e um retrato de 4 MB vai
+        num pedido que a plataforma recusa: o mesmo 413 que as fotografias dos
+        imóveis já tiveram, num caminho que ninguém tinha reparado.
+        """
+        config = config_perfil()
+        html = self.client.get(self.url).content.decode("utf-8")
+        form = re.search(r"<form[^>]*settings-form.*?>", html, re.DOTALL)
+        self.assertIsNotNone(form, "o formulário do perfil não tem settings-form")
+        atributos = form.group(0)  # type: ignore[union-attr]
+
+        self.assertIn(f'data-orcamento-mb="{config["orcamento_perfil_mb"]}"', atributos)
+        self.assertIn(
+            f'data-lado-maximo="{config["lado_maximo_perfil_cliente"]}"', atributos
+        )
+        # O redutor procura `images` e este campo chama-se `photo`: sem o nome, o
+        # JavaScript liga-se ao input errado e não reduz nada.
+        self.assertIn('data-input-ficheiros="photo"', atributos)
+        # §2.13: um número que viaja sai invariante. Em `pt-AO`, `0.5` escreve-se
+        # `0,5`, e `Number("0,5")` é `NaN` — um redutor com orçamento `NaN`
+        # compara com `NaN` e nunca reduz. A fotografia ia crua, e o `413` que
+        # estes números existem para evitar voltava, em silêncio e sem erro.
+        self.assertNotIn(",", atributos, "vírgula decimal num atributo lido por Number()")
+        self.assertIn(".", atributos)
+
+    def test_o_orçamento_do_retrato_cabe_no_pedido(self) -> None:
+        """O meio megabyte é o número que evita o 413, e vale a pena escrevê-lo."""
+        self.assertLess(ORCAMENTO_PERFIL_MB, LIMITE_FOTO_PERFIL_MB)
+        self.assertEqual(
+            config_perfil()["lado_maximo_perfil_cliente"],
+            LADO_RETRATO_PX,
+            "o browser e o servidor têm de reduzir para o mesmo lado",
+        )
+
+    def test_o_backend_de_retratos_segue_a_setting(self) -> None:
+        """O campo declara a sua storage, e a storage é a que as settings escolheram."""
+        with APENAS_NUVEM:
+            self.assertIsInstance(storage_perfis(), CloudinaryAvatarStorage)
+
+    def test_a_storage_do_retrato_vem_da_setting(self) -> None:
+        """O campo não repete a escolha: pede-a a `storage_perfis`, como os documentos.
+
+        A `FileField` chama a sua `storage` **uma vez**, ao definir o campo. Sem
+        isso, um retrato em produção acabaria na pasta das capas — que é o
+        `default` — e ninguém veria o erro: a imagem aparecia na mesma.
+        """
+        campo = User._meta.get_field("photo")
+        deconstruido = campo.deconstruct()
+
+        self.assertIs(
+            deconstruido[3].get("storage"),
+            storage_perfis,
+            "o campo tem de pedir a storage à função, e não guardá-la",
+        )
+        self.assertEqual(campo.storage.__class__.__name__, "FileSystemStorage")
+
+    def test_a_migration_que_muda_o_retrato_leva_a_referencia(self) -> None:
+        """A migration é o que dá a storage certa ao ambiente que a vai aplicar.
+
+        O `MEDIA_PERFIS_BACKEND` é lido no arranque, e a base de produção aplica a
+        migration antes do primeiro pedido. Se a migration guardar a *instância* em
+        vez da referência, é o disco de quem a aplicou que fica no estado da base
+        de dados, e a Cloudinary nunca chega a ser usada.
+        """
+        caminho = Path(__file__).resolve().parent / "migrations" / "0005_alter_user_photo.py"
+
+        self.assertIn("apps.core.storage.storage_perfis", caminho.read_text("utf-8"))
+
+    def test_sem_a_nuvem_o_retrato_vai_para_disco(self) -> None:
+        """Em desenvolvimento não há Cloudinary, e o retrato tem de ficar guardável.
+
+        O caminho inverso também é um caminho: um backend configurado que não
+        resolve devolve um disco, e `storage_documentacao` — que é o mesmo padrão
+        — escolhe o disco quando a setting não aponta para a nuvem. O que não pode
+        é rebentar no arranque de uma máquina de desenvolvimento.
+        """
+        with override_settings(MEDIA_PERFIS_BACKEND="apps.core.files.StorageNaoExiste"):
+            self.assertIsInstance(storage_perfis(), FileSystemStorage)
 
 
 class AccountAdminTests(RateLimitFreeTestCase):

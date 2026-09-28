@@ -205,6 +205,15 @@ MEDIA_DOCUMENTACAO_BACKEND = (
     else "django.core.files.storage.FileSystemStorage"
 )
 
+# O retrato é público, como a capa, mas não é uma capa: aos 512 px e na sua pasta.
+# O `default` continua a ser o das imagens de imóvel, e é por isso que o campo
+# `User.photo` declara o seu — como o do documento, e pelo mesmo motivo.
+MEDIA_PERFIS_BACKEND = (
+    "apps.core.storage.CloudinaryAvatarStorage"
+    if CLOUDINARY_PUBLICAO
+    else "django.core.files.storage.FileSystemStorage"
+)
+
 STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"

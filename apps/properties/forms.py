@@ -558,11 +558,36 @@ class PropertyQuickEditForm(PrazoDeContratoMixin, BaseGeoFields):
     bedrooms = forms.IntegerField(label="Quartos", required=False, min_value=0, max_value=30)
     bathrooms = forms.IntegerField(label="Casas de banho", required=False, min_value=0, max_value=30)
 
-    OWNER_FIELDS: set[str] = set()
+    CAMPOS_NAO_GUARDADOS: set[str] = {"localizacao_confirmada"}
+
+    localizacao_confirmada = forms.BooleanField(
+        label="Confirmei a localização por satélite",
+        required=False,
+        help_text=(
+            "Marque depois de confirmar o ponto na imagem de satélite. Largar o pin no "
+            "mapa não confirma nada: o imóvel perde a confirmação e deixa de poder ser "
+            "publicado até alguém a fazer."
+        ),
+    )
 
     def property_fields(self) -> dict[str, object]:
-        """Todos os campos limpos são do imóvel: aqui não há proprietário."""
-        return dict(self.cleaned_data)
+        """Devolve os campos do imóvel, menos a caixa que não é coluna."""
+        return {
+            key: value
+            for key, value in self.cleaned_data.items()
+            if key not in self.CAMPOS_NAO_GUARDADOS
+        }
+
+    def confirmou_localizacao(self) -> bool:
+        """Diz se a equipa afirma ter inspeccionado o ponto por satélite (§2.3).
+
+        O método não pode chamar-se como o campo. Numa `Form`, o atributo de
+        classe do campo é o que o template resolve em `form.<nome>`, e um método
+        com o mesmo nome ficava por cima dele: o `{{ form.localizacao_confirmada }}`
+        da ficha desenhava o resultado de `()`, e a página levantava um
+        `AttributeError` de `cleaned_data` em vez de mostrar a caixa.
+        """
+        return bool(self.cleaned_data.get("localizacao_confirmada"))
 
     def clean_price(self) -> Decimal:
         """Aceita o mesmo formato angolano de milhares que a captação."""

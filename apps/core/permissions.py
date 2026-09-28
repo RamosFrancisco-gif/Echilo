@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest
 
-User = get_user_model()
-
 
 def is_team_member(user: object) -> bool:
-    """Diz se o utilizador pertence à equipa interna do Echilo."""
+    """Diz se o utilizador pertence à equipa interna do Echilo.
+
+    A regra está em `User.is_team_role`, como as outras. Repetir aqui o conjunto de
+    perfis dava um segundo sítio a responder à pergunta "quem é da equipa", e a
+    divergência entre os dois não daria erro: a guarda deixava passar, e o menu
+    escondia a entrada — ou o contrário, que é pior.
+    """
     return bool(
-        getattr(user, "is_authenticated", False) and getattr(user, "role", None) != User.Role.CLIENT
+        getattr(user, "is_authenticated", False) and getattr(user, "is_team_role", False)
     )
 
 

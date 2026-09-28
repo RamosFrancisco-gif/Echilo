@@ -7,6 +7,7 @@ from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
+from apps.core.storage import storage_perfis
 from apps.core.validators import validate_adult, validate_angolan_phone, validate_nif
 from apps.properties.reference import ANGOLA_PROVINCES
 
@@ -103,6 +104,11 @@ class User(AbstractUser):
         upload_to="perfis/%Y/%m/",
         null=True,
         blank=True,
+        # O `default` é a storage das capas de imóvel, e um retrato não é uma capa:
+        # aos 2000 px e na pasta `echilo/imoveis`. O §6 não obriga a uma storage
+        # própria aqui — o retrato é público — mas a pasta e o tamanho sim, e por
+        # isso o campo declara a sua, como o do documento legal.
+        storage=storage_perfis,
     )
     is_team_member = models.BooleanField("membro da equipa", default=False, editable=False)
     created_at = models.DateTimeField("criado em", auto_now_add=True)
@@ -113,14 +119,17 @@ class User(AbstractUser):
     class Meta:
         verbose_name = "utilizador"
         verbose_name_plural = "utilizadores"
-        ordering = ["full_name"]
+        # O nome é uma chave fraca em Angola: «Ana Silva» há mais de uma pessoa, e
+        # a lista de contas é paginada. Sem o `id` a mesma conta podia aparecer em
+        # duas páginas, e o `id` desempata no sentido em que a pessoa entrou.
+        ordering = ["full_name", "id"]
 
     def __str__(self) -> str:
         return f"{self.full_name} ({self.email})"
 
     def save(self, *args: object, **kwargs: object) -> None:
         """Deriva a isenção de equipa e o acesso staff a partir do perfil."""
-        self.is_team_member = self.role != self.Role.CLIENT
+        self.is_team_member = self.is_team_role
         if not self.is_team_member:
             # Um cliente nunca acede ao painel interno (§3).
             self.is_staff = False
@@ -163,6 +172,18 @@ class User(AbstractUser):
         if derivada is None:
             return self.photo.url
         return derivada(self.photo.name, largura=AVATAR_LARGURA_PX)
+
+    @property
+    def is_team_role(self) -> bool:
+        """Diz se o perfil trabalha dentro do produto (§3).
+
+        A lista é branca de propósito. `role != CLIENT` é uma lista negra, e uma
+        lista negra transforma-se num convite: acrescentar um perfil ao `Role`
+        promovia-o a membro da equipa no dia em que alguém o escrevesse, sem
+        nenhuma linha de código a ser revista. O portal do proprietário tem um
+        perfil novo, e um dono que é lido como equipa entra na curadoria.
+        """
+        return self.role in {self.Role.CURATOR, self.Role.AGENT, self.Role.ADMIN}
 
     @property
     def can_curate(self) -> bool:

@@ -1,0 +1,532 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}</style><style>:root{color-scheme:light dark;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}}:root[data-theme="dark"]{color-scheme:dark;--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}:root[data-theme="light"]{color-scheme:light}@media print{:root,:root[data-theme="dark"]{color-scheme:light;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}}body{background:var(--md-bg);color:var(--md-text);max-width:720px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:10px;font:14px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;overflow-wrap:break-word}body>:first-child{margin-top:0}h1,h2,h3,h4,h5,h6{margin:6px 0 0;line-height:1.25;font-weight:600;text-wrap:balance}h1{font-size:1.35em}h2{font-size:1.15em;color:var(--md-muted)}h3,h4,h5,h6{font-size:1em}p,ul,ol,blockquote,table,pre,hr{margin:0}strong{font-weight:600}a{color:var(--md-link);text-decoration:none}a:hover{text-decoration:underline}ul,ol{display:flex;flex-direction:column;gap:6px;padding-left:22px}ul{list-style:disc}ol{list-style:decimal}:is(li,td,th)>*+:is(p,ul,ol,blockquote){margin-top:6px}blockquote{display:flex;flex-direction:column;gap:10px;border-left:2px solid var(--md-rule);padding-left:10px;color:var(--md-muted)}:not(pre)>code{background:var(--md-fill);padding:1px 3px;border-radius:4px;font:.92em 'SF Mono',ui-monospace,Menlo,Consolas,monospace}a>code{background:none;color:inherit}pre{background:var(--md-fill);padding:10px 12px;border-radius:6px;overflow-x:auto;font:12px/1.5 'SF Mono',ui-monospace,Menlo,Consolas,monospace;margin-block:4px}pre code{background:none;padding:0;font:inherit}table{width:100%;border-collapse:separate;border-spacing:2px;font:inherit}th,td{padding:6px 8px;border-radius:3px;text-align:left;vertical-align:top}th{background:var(--md-fill-strong);font-weight:600}td{background:var(--md-fill)}:is(th,td) :not(pre)>code{background:transparent}hr{border:0;border-top:1px solid var(--md-rule-strong);margin-block:10px}img{max-width:100%;height:auto;border-radius:4px}</style>
+</head><body>
+<h1>Echilo — plano reestruturado</h1>
+<blockquote>
+<p>Versão 2 do <code>plano.md</code>. Mantém a base técnica que já existe e reorganiza o resto em torno do negócio: disponibilidade, confiança, dinheiro e canal (WhatsApp).
+Legenda de estado: <strong>[existe]</strong>, <strong>[parcial]</strong>, <strong>[falta]</strong>. O estado vem do plano anterior, não de uma leitura do código; confirmar antes de planear sprints.</p>
+</blockquote>
+<hr>
+<h2>1. O que o Echilo é</h2>
+<p>Plataforma angolana de <strong>mediação imobiliária curada</strong>. Liga proprietários a inquilinos e compradores (casas, apartamentos, terrenos) através de uma equipa interna que valida cada imóvel antes de o publicar.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Portal de anúncios</th>
+<th>Echilo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Quem publica</td>
+<td>o dono</td>
+<td>a equipa, após verificar</td>
+</tr>
+<tr>
+<td>O que é visível</td>
+<td>o que o dono carregou</td>
+<td>o que a equipa validou</td>
+</tr>
+<tr>
+<td>Contacto do dono</td>
+<td>público</td>
+<td>nunca público</td>
+</tr>
+<tr>
+<td>Conversas</td>
+<td>cada um com cada um</td>
+<td>fila da equipa, com dono, estado e prazo</td>
+</tr>
+<tr>
+<td>Receita</td>
+<td>anúncio ou destaque</td>
+<td>comissão sobre negócio fechado</td>
+</tr>
+</tbody>
+</table>
+<h3>Regras de negócio (fixas)</h3>
+<ol>
+<li>O proprietário <strong>não publica</strong>. Contacta a equipa por WhatsApp, formulário ou chamada.</li>
+<li>A equipa recolhe fotos, localização, preço, tipo de contrato e documentação legal, e regista o imóvel.</li>
+<li>O cliente navega e consulta livremente. A IA é o 1.º nível de atendimento (24/7). A equipa trata de visitas, propostas formais e fecho.</li>
+<li>Receita: <strong>comissão de 8%</strong> sobre o valor final de venda, ou sobre o valor acordado do arrendamento. Nada é cobrado por anunciar nem por procurar.</li>
+</ol>
+<h3>Pontos da comissão que têm de ser fechados (ver §9)</h3>
+<ul>
+<li>Base de cálculo no arrendamento: renda mensal, anual ou valor total do contrato.</li>
+<li>Quem paga: proprietário, cliente ou repartido.</li>
+<li>Renovações: há comissão ou só no primeiro contrato.</li>
+<li>Moeda: a moeda do contrato é a fonte de verdade e a comissão calcula-se nela.</li>
+</ul>
+<hr>
+<h2>2. Ciclo de vida do imóvel (revisto)</h2>
+<p>O plano anterior terminava em <code>PUBLISHED → ARCHIVED</code>. Faltava o que acontece <strong>depois</strong> de haver negócio.</p>
+<pre><code>DRAFT → IN_REVIEW → UNDER_VALIDATION → PUBLISHED
+            ↑              │                │
+            └── CHANGES_REQUESTED           ├─→ RESERVED  (proposta aceite)
+                           │                │      ├─→ RENTED | SOLD
+                           └─→ REJECTED     │      └─→ PUBLISHED (negócio caiu)
+                                            ├─→ PAUSED    (dono não reconfirmou)
+                                            └─→ ARCHIVED
+</code></pre>
+<ul>
+<li>O estado é a única fonte de verdade da visibilidade. Não há <code>is_public</code>.</li>
+<li>Só <code>PUBLISHED</code> aparece no catálogo. <code>RESERVED</code>, <code>RENTED</code> e <code>SOLD</code> aparecem na ficha (link directo) com o aviso e alternativas, mas não na pesquisa.</li>
+<li>Toda a transição regista autor e motivo (<code>PropertyStatusEvent</code>).</li>
+<li><strong>Reconfirmação de disponibilidade</strong> a cada X dias (valor a definir): sem resposta do dono, o imóvel passa a <code>PAUSED</code>.</li>
+<li>Publicar exige: título de propriedade e documento de identificação <code>VERIFIED</code>, localização verificada por satélite e um motivo registado.</li>
+</ul>
+<hr>
+<h2>3. Fluxos ponta a ponta</h2>
+<h3>3.1 Proprietário</h3>
+<pre><code>Contacto → Lead (OWNER_INTAKE) → triagem → visita técnica → mandato assinado
+→ recolha de fotos, pin, preço, condições, documentos
+→ cadastro em DRAFT → validação → PUBLISHED
+→ acompanhamento pelo portal do proprietário / avisos WhatsApp
+→ propostas (via equipa) → fecho → comissão
+</code></pre>
+<h3>3.2 Cliente</h3>
+<pre><code>Pesquisa / mapa → ficha → [Guardar | Perguntar à IA | Pedir visita | Fazer proposta]
+   IA responde só com dados do imóvel; o resto escala com resumo
+   Visita: pedido → confirmação → lembrete → realizada
+   Proposta: submetida → em análise → contraproposta(s) → aceite
+   Aceite → reserva → contrato → comissão → imóvel fechado
+</code></pre>
+<hr>
+<h2>4. Perfis e permissões</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>CLIENT</th>
+<th>OWNER (novo)</th>
+<th>CURATOR</th>
+<th>AGENT</th>
+<th>ADMIN</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Navegar, guardar, IA</td>
+<td>sim</td>
+<td>sim</td>
+<td>sim</td>
+<td>sim</td>
+<td>sim</td>
+</tr>
+<tr>
+<td>Pedir visita e proposta</td>
+<td>sim</td>
+<td>—</td>
+<td>sim</td>
+<td>sim</td>
+<td>sim</td>
+</tr>
+<tr>
+<td>Ver estado dos seus imóveis, visitas, propostas</td>
+<td>—</td>
+<td><strong>sim (só leitura)</strong></td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Criar/editar imóvel, fotos, transições</td>
+<td>—</td>
+<td>—</td>
+<td>sim</td>
+<td>sim</td>
+<td>sim</td>
+</tr>
+<tr>
+<td>Validar documentos</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>sim</td>
+<td>sim</td>
+</tr>
+<tr>
+<td>Confirmar visitas, decidir propostas</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>sim</td>
+<td>sim</td>
+</tr>
+<tr>
+<td>Contratos e comissões</td>
+<td>—</td>
+<td>vê os seus</td>
+<td>—</td>
+<td>sim</td>
+<td>sim</td>
+</tr>
+<tr>
+<td>Gerir contas, relatórios</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>sim</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>A regra vive num só sítio (permissões do modelo), lida pela view e pelo menu. Um teste obriga os dois a concordar.</li>
+<li>Sem permissão, resposta 403.</li>
+<li><code>OWNER</code> nunca edita nem aceita propostas sozinho: a decisão passa pela equipa e fica registada.</li>
+</ul>
+<hr>
+<h2>5. Módulos</h2>
+<h3>M1 — Catálogo e ficha pública <strong>[existe, a melhorar]</strong></h3>
+<ul>
+<li>Pesquisa com filtros e mapa, área desenhada, cartões e ficha com galeria.</li>
+<li><strong>Novo:</strong> selo &quot;Verificado pelo Echilo&quot; com o que foi verificado; condições comerciais estruturadas (caução, meses adiantados, pagamento anual, água, energia, gerador, condomínio); estado visível; alternativas quando fechado.</li>
+<li>Fluxo: <code>pesquisa → cartão → ficha → acção</code>.</li>
+</ul>
+<h3>M2 — Conta e verificação progressiva <strong>[parcial]</strong></h3>
+<ul>
+<li>Hoje: registo exige NIF, BI e 18 anos.</li>
+<li><strong>Novo:</strong> navegar sem conta; pedir visita com nome + telefone + código de confirmação; NIF e BI só na proposta formal ou no contrato.</li>
+<li>Fluxo: <code>navegar → visita (telefone verificado) → proposta (identidade completa)</code>.</li>
+</ul>
+<h3>M3 — Assistente de IA (nível 1) <strong>[existe, a melhorar]</strong></h3>
+<ul>
+<li>Responde só a partir de imóveis publicados. Não negoceia, não promete valor, não marca visitas.</li>
+<li><strong>Novo:</strong> regista as perguntas sem resposta como lacunas de dados; escala com resumo para o cliente não repetir; indica quando a equipa responde fora de horas.</li>
+<li>Falha do fornecedor não escala: fica <code>OPEN</code> com nota interna.</li>
+<li>Fluxo: <code>pergunta → dados do imóvel → resposta | &quot;vou perguntar à equipa&quot; | escalação (visita, proposta, preço, contrato, disputa, documentação)</code>.</li>
+</ul>
+<h3>M4 — Favoritos e alertas <strong>[falta]</strong></h3>
+<ul>
+<li><code>Favorite(user, property)</code>, único por par. Lista paginada com o mesmo cartão.</li>
+<li>Pesquisas guardadas com aviso por WhatsApp quando entra imóvel novo ou desce o preço.</li>
+<li>Fluxo: <code>guardar → evento → notificação</code>.</li>
+</ul>
+<h3>M5 — Visitas <strong>[parcial: o cliente cria, ninguém trata]</strong></h3>
+<ul>
+<li>Estados: <code>PENDING → CONFIRMED | DECLINED → COMPLETED | NO_SHOW</code>.</li>
+<li>Recusa exige motivo. A detecção de sobreposição passa a ser usada.</li>
+<li>Lembrete 24 h antes. Após visita concluída, pergunta &quot;quer fazer proposta?&quot;.</li>
+<li>Uma visita concluída fica registada como <strong>apresentação do cliente ao imóvel</strong>, prova para a comissão.</li>
+</ul>
+<h3>M6 — Propostas e negociação <strong>[parcial]</strong></h3>
+<ul>
+<li>Estados: <code>SUBMITTED → UNDER_REVIEW → COUNTERED → ACCEPTED | REJECTED | WITHDRAWN</code>.</li>
+<li><strong>Novo campo <code>parent</code></strong> na <code>Offer</code>: a contraproposta referencia a anterior; a negociação deixa de depender da ordem das datas.</li>
+<li><code>ACCEPTED</code> passa o imóvel a <code>RESERVED</code> e abre o fecho (M10).</li>
+<li>Toda a negociação é humana.</li>
+</ul>
+<h3>M7 — Captação e mandato <strong>[parcial: existe o Lead]</strong></h3>
+<ul>
+<li>Lead com estados <code>NEW → CONTACTED → QUALIFIED → CONVERTED | DISQUALIFIED</code>.</li>
+<li><strong>Novo:</strong> <code>Mandate</code> com comissão, prazo, exclusividade e cláusula de comissão devida se fechar com cliente apresentado pelo Echilo.</li>
+<li>Validar o texto do mandato com advogado.</li>
+</ul>
+<h3>M8 — Curadoria e documentos <strong>[parcial]</strong></h3>
+<ul>
+<li>Curadoria e transições existem. Documentos e triagem hoje vivem no <code>/admin</code>.</li>
+<li><strong>Falta:</strong> envio de documento por POST separado (um ficheiro por pedido, validação de bytes <code>%PDF-</code>), verificação e rejeição com motivo, remoção com confirmação, página de triagem que usa <code>is_ready_for_review()</code>.</li>
+<li>Critério: um imóvel chega a <code>PUBLISHED</code> sem sair do produto.</li>
+</ul>
+<h3>M9 — Portal do proprietário <strong>[falta]</strong></h3>
+<ul>
+<li>Só leitura, por link seguro ou conta <code>OWNER</code>: estado do imóvel, visitas, propostas, comissão prevista.</li>
+<li>Reduz o &quot;então, há novidades?&quot; por WhatsApp.</li>
+</ul>
+<h3>M10 — Fecho, contrato e comissão <strong>[falta]</strong></h3>
+<ul>
+<li><code>Contract(imóvel, cliente, tipo, valor, moeda, início, fim, estado)</code>; estados <code>DRAFT → SENT → SIGNED → ACTIVE → CLOSED | CANCELLED</code>.</li>
+<li><code>Commission(contrato, percentagem, valor)</code> derivada, nunca escrita à mão; arredondamento fixado por teste.</li>
+<li>Assinatura: PDF gerado, entregue por link assinado, como a documentação legal.</li>
+<li><code>Installment</code> só entra se o Echilo passar a cobrar rendas (decisão em §9).</li>
+<li>Ao fechar, o imóvel passa a <code>RENTED</code> ou <code>SOLD</code>.</li>
+</ul>
+<h3>M11 — Mesa da equipa <strong>[falta, prioridade máxima]</strong></h3>
+<ul>
+<li>Inbox única: conversas escaladas, leads, visitas e propostas, cada uma com dono, estado e prazo de resposta (SLA).</li>
+<li>Conversa: transcrição sem mensagens internas visíveis ao cliente, resposta, resolver.</li>
+<li><code>PropertyNote</code> para notas sobre imóveis e clientes fora de qualquer conversa.</li>
+<li>Permissão: <code>AGENT</code>, <code>ADMIN</code>.</li>
+<li>Critério: uma conversa escalada aparece na inbox com motivo, o agente responde, o cliente vê. Nada passa pelo <code>/admin</code>.</li>
+</ul>
+<h3>M12 — Notificações <strong>[falta; hoje só existe o e-mail de senha]</strong></h3>
+<ul>
+<li>Regra única: <code>notify(destinatário, tipo, contexto)</code>. Nenhum outro módulo envia mensagens.</li>
+<li><strong>WhatsApp como canal principal</strong>, e-mail como reserva.</li>
+<li>Eventos: visita pedida/confirmada/recusada, proposta submetida/em análise/aceite/recusada, documento verificado/rejeitado, imóvel publicado, conversa escalada, lead criado.</li>
+<li>Envio em <code>on_commit</code>. Falha de envio nunca desfaz a operação de negócio.</li>
+<li>WhatsApp Business exige conta, templates aprovados e janela de 24 h: tratar como projecto próprio.</li>
+</ul>
+<h3>M13 — Gestão e qualidade <strong>[falta]</strong></h3>
+<ul>
+<li>KPIs de operação (não analytics de comportamento): tempo de resposta, visita→proposta, proposta→fecho, dias até publicar, receita por mês, município e agente.</li>
+<li>Fila de reconfirmação de disponibilidade.</li>
+</ul>
+<hr>
+<h2>6. Base técnica (mantida)</h2>
+<table>
+<thead>
+<tr>
+<th>Decisão</th>
+<th>Razão</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vercel serverless, <code>maxDuration: 10</code></td>
+<td>Sem estado entre invocações; toda a operação cabe em 10 s</td>
+</tr>
+<tr>
+<td>Media na Cloudinary, 3 backends (capas públicas, documentos privados, retratos)</td>
+<td>Fotos públicas; documentação legal nunca</td>
+</tr>
+<tr>
+<td>Limite de upload 4 MB abaixo do pedido de 4,5 MB; redução no cliente</td>
+<td>A Vercel recusa na edge, antes do Django</td>
+</tr>
+<tr>
+<td><code>Decimal</code>, nunca <code>float</code>; um formatador de dinheiro</td>
+<td>Dinheiro. <strong>Alterar:</strong> suportar Kwanza e dólar, com a moeda do contrato como fonte</td>
+</tr>
+<tr>
+<td><code>pt-ao</code> + filtro <code>coordinate</code></td>
+<td>Números localizados são bons para ler e maus para viajar em atributos, URLs e JSON</td>
+</tr>
+<tr>
+<td>Pin vem de inspecção de satélite, nunca da morada</td>
+<td>Precisão registada (<code>location_accuracy_m</code>, <code>location_verified_at</code>)</td>
+</tr>
+<tr>
+<td>MySQL sem PostGIS: caixa envolvente + Haversine</td>
+<td>Índice barato; suficiente para busca por área</td>
+</tr>
+<tr>
+<td>HTMX, sem SPA, sem build de JS, bibliotecas vendorizadas</td>
+<td>Um passo de build é um ponto de falha silencioso</td>
+</tr>
+<tr>
+<td>Ordenação com desempate por <code>-id</code></td>
+<td>Sem isso, paginação repete ou esconde linhas</td>
+</tr>
+<tr>
+<td><code>DocumentAccessLog</code> sem <code>CASCADE</code></td>
+<td>Apagar o ficheiro não apaga a prova de quem o leu</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2>7. Fases</h2>
+<p><strong>Fase 0 — Publicar o que está feito</strong>
+Migrations <code>accounts.0005</code> e <code>properties.0009</code> em produção antes do deploy; confirmar <code>CLOUDINARY_PUBLICAO</code>; <code>verify_cloudinary</code>; <strong>rodar as credenciais Aiven e Cloudinary expostas</strong>; criar contas <code>CURATOR</code> e <code>AGENT</code>; corrigir o <code>AGENTS.md</code> (favoritos); desempatar os 8 modelos apontados pelo teste de ordenação.</p>
+<p><strong>Fase 1 — Correcções e estados</strong>
+<code>apply_quick_edit()</code> deve limpar (não carimbar) <code>location_verified_at</code> quando o pin muda. Introduzir <code>RESERVED</code>, <code>RENTED</code>, <code>SOLD</code>, <code>PAUSED</code>. Campos estruturados das condições comerciais. Garantir que <code>seed_demo</code> não duplica referências.</p>
+<p><strong>Fase 2 — Mesa da equipa (M11)</strong>
+A fase que faz o produto. Inbox, leads com transições, visitas, propostas com <code>parent</code>, <code>PropertyNote</code>.</p>
+<p><strong>Fase 3 — Documentos e triagem dentro do produto (M8)</strong></p>
+<p><strong>Fase 4 — Notificações e WhatsApp (M12)</strong>
+Sobe do antigo &quot;Fase 8&quot;: é o canal do negócio.</p>
+<p><strong>Fase 5 — Dinheiro (M7 mandato + M10)</strong>
+Mandato, contrato, assinatura, comissão de 8% com arredondamento testado, moeda do contrato.</p>
+<p><strong>Fase 6 — Experiência do utilizador (M2, M4, M9)</strong>
+Registo progressivo, favoritos e alertas, portal do proprietário.</p>
+<p><strong>Fase 7 — Gestão e operação (M13 + operação)</strong>
+Painel de KPIs; logs estruturados com <code>request_id</code>; <code>/saude/</code> (BD, Cloudinary, Groq); <code>check --deploy</code>; backup <strong>restaurado com sucesso ao menos uma vez</strong>; rotação de credenciais como comando.</p>
+<p><strong>Fase 8 — Decisões de dono</strong>
+API pública para parceiros.</p>
+<hr>
+<h2>8. Riscos</h2>
+<table>
+<thead>
+<tr>
+<th>Risco</th>
+<th>Gravidade</th>
+<th>Mitigação</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fuga de comissão (negócio fechado fora do Echilo)</td>
+<td><strong>alta</strong></td>
+<td>Mandato com cláusula de comissão; registo de apresentações (visitas); telefone do dono nunca público</td>
+</tr>
+<tr>
+<td>Sem consola da equipa</td>
+<td><strong>alta</strong></td>
+<td>Fase 2</td>
+</tr>
+<tr>
+<td>Credenciais expostas</td>
+<td><strong>alta</strong></td>
+<td>Rodar já</td>
+</tr>
+<tr>
+<td>Sem backup ensaiado</td>
+<td><strong>alta</strong></td>
+<td>Fase 7</td>
+</tr>
+<tr>
+<td>Catálogo desatualizado</td>
+<td>média/alta</td>
+<td>Novos estados + reconfirmação de disponibilidade</td>
+</tr>
+<tr>
+<td>Dados insuficientes para a IA responder</td>
+<td>média</td>
+<td>Campos estruturados; registo de lacunas</td>
+</tr>
+<tr>
+<td><code>maxDuration: 10</code> com upload de 15 imagens e Cloudinary</td>
+<td>alta</td>
+<td>Medir; um POST por ficheiro</td>
+</tr>
+<tr>
+<td>Upload acima de 4,5 MB (lote de 15 sem JS)</td>
+<td>alta</td>
+<td>Redução no cliente + tecto de validação</td>
+</tr>
+<tr>
+<td>Limite de adesões por IP (escritório com NAT)</td>
+<td>média</td>
+<td>Limitar por pessoa (telefone), não só por IP</td>
+</tr>
+<tr>
+<td>Tiles de mapa gratuitos em produção</td>
+<td>média</td>
+<td>Contratar fornecedor (<code>ECHILO_MAP_TILE_URL</code>)</td>
+</tr>
+<tr>
+<td>Busca por <code>LIKE</code></td>
+<td>média</td>
+<td>Aceitável até dezenas de milhares de imóveis; depois texto completo</td>
+</tr>
+<tr>
+<td>Dados pessoais e documentos (NIF, BI, títulos)</td>
+<td>média</td>
+<td>Acesso registado, retenção definida; confirmar obrigações da lei angolana de protecção de dados</td>
+</tr>
+<tr>
+<td>Enquadramento legal da mediação e do mandato</td>
+<td>média</td>
+<td>Validar com advogado</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2>9. Decisões do dono</h2>
+<p><strong>Já decididas</strong></p>
+<ul>
+<li>O cliente <strong>não paga</strong> para procurar nem para ver contacto; o dono não paga para anunciar (resolve as antigas decisões §9.4 e §9.6).</li>
+<li>Comissão de <strong>8%</strong> sobre o negócio fechado.</li>
+</ul>
+<p><strong>Em aberto</strong></p>
+<ol>
+<li>Base de cálculo no arrendamento (mensal, anual, total).</li>
+<li>Quem paga os 8%.</li>
+<li>Renovações: comissão ou não.</li>
+<li>O Echilo cobra rendas (então entra <code>Installment</code>) ou só comissão?</li>
+<li>Prazo do mandato e da exclusividade.</li>
+<li>Intervalo da reconfirmação de disponibilidade.</li>
+<li>Moedas suportadas (Kwanza e dólar?).</li>
+<li>WhatsApp Business: quem gere conta e templates?</li>
+<li>O Echilo guarda escrituras e títulos? Implica política de retenção.</li>
+<li>API pública para parceiros (contrato público para sempre).</li>
+</ol>
+<hr>
+<h2>10. Fora do âmbito (revisto)</h2>
+<table>
+<thead>
+<tr>
+<th>Ideia</th>
+<th>Decisão</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SPA / React, build de JS</td>
+<td>Não</td>
+</tr>
+<tr>
+<td>PostGIS</td>
+<td>Não</td>
+</tr>
+<tr>
+<td>CMS</td>
+<td>Não</td>
+</tr>
+<tr>
+<td>Push notifications</td>
+<td>Não; o canal é WhatsApp</td>
+</tr>
+<tr>
+<td>Multi-idioma</td>
+<td>Não, sem segundo cliente</td>
+</tr>
+<tr>
+<td>Testes end-to-end com browser</td>
+<td>Não</td>
+</tr>
+<tr>
+<td>Analytics de comportamento, testes A/B, motor de recomendação</td>
+<td>Não</td>
+</tr>
+<tr>
+<td><strong>KPIs de operação</strong> (M13)</td>
+<td><strong>Sim</strong>: funil, tempos de resposta, receita</td>
+</tr>
+<tr>
+<td><strong>Imóveis alternativos por filtros simples</strong></td>
+<td><strong>Sim</strong>, quando um imóvel fecha; não é recomendação personalizada</td>
+</tr>
+<tr>
+<td>Fila de tarefas</td>
+<td>Não por agora; reavaliar se o WhatsApp exigir reenvios</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2>11. Como se sabe que está profissional</h2>
+<p><strong>Produto</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> Um imóvel chega a <code>PUBLISHED</code> sem sair do produto</li>
+<li><input disabled="" type="checkbox"> Visita criada, confirmada e concluída dentro do produto</li>
+<li><input disabled="" type="checkbox"> Conversa escalada é lida e respondida dentro do produto</li>
+<li><input disabled="" type="checkbox"> Uma proposta aceite reserva o imóvel e abre contrato</li>
+<li><input disabled="" type="checkbox"> Um imóvel fechado deixa de aparecer na pesquisa</li>
+<li><input disabled="" type="checkbox"> Toda a transição tem autor, motivo e registo</li>
+<li><input disabled="" type="checkbox"> Um cliente encontra o imóvel, pede visita e recebe resposta sem e-mail e sem telefone público</li>
+<li><input disabled="" type="checkbox"> A comissão de cada contrato é calculada, não digitada</li>
+</ul>
+<p><strong>Verdade do que o sistema diz</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> Nenhuma lista repete ou esconde linhas</li>
+<li><input disabled="" type="checkbox"> O número de imóveis do mapa é o que o mapa mostra</li>
+<li><input disabled="" type="checkbox"> Nenhuma capacidade no <code>AGENTS.md</code> sem código, e vice-versa</li>
+<li><input disabled="" type="checkbox"> Nenhum número em atributo, URL ou JSON usa vírgula decimal</li>
+</ul>
+<p><strong>Operação</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> Todo o 500 tem <code>request_id</code> e chega a alguém</li>
+<li><input disabled="" type="checkbox"> <code>/saude/</code> diz qual dos três serviços falhou</li>
+<li><input disabled="" type="checkbox"> Um backup foi restaurado com sucesso</li>
+<li><input disabled="" type="checkbox"> Credenciais rodadas depois de expostas</li>
+<li><input disabled="" type="checkbox"> Testes verdes, <code>makemigrations --check</code> limpo, <code>ruff</code> sem avisos novos</li>
+</ul>
+<p><strong>Código</strong></p>
+<ul>
+<li><input disabled="" type="checkbox"> Type hints em <code>services.py</code>, <code>selectors.py</code> e <code>views.py</code></li>
+<li><input disabled="" type="checkbox"> <code>assertNumQueries</code> em cada lista</li>
+<li><input disabled="" type="checkbox"> Nenhum <code>except</code> nu</li>
+<li><input disabled="" type="checkbox"> Nenhuma constante escrita em três sítios</li>
+</ul>
+<hr>
+<h2>12. Correcções ao documento anterior</h2>
+<ul>
+<li>Corrigir texto corrompido: &quot;trêsoccasion&quot;, &quot;quemlegs&quot;, &quot;comportamiento&quot;, &quot;Fundo do mar&quot;.</li>
+<li>A tabela de permissões (§2.3 antigo) mostrava &quot;Painel <code>/admin</code>&quot; sem nenhum perfil com acesso; clarificar que a curadoria tem de viver no produto e não no <code>/admin</code>.</li>
+<li>A numeração dos módulos (§6) e das fases (§7) do plano antigo não coincidiam; neste documento cada módulo tem código M1–M13 e cada fase indica os módulos que fecha.</li>
+<li>O <code>AGENTS.md</code> continua normativo; este documento é descritivo. Onde divergirem, o código decide e ambos se corrigem.</li>
+</ul>
+
+</body></html>

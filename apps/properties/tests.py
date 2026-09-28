@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from django import forms
+from django.apps import apps
 from django.conf import settings
 from django.contrib.messages import get_messages
 from django.core.cache import cache
@@ -21,10 +22,12 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.forms.formsets import BaseFormSet
 from django.forms.models import inlineformset_factory as admin_formset_factory
 from django.http import HttpResponse
+from django.db.models import Model
 from django.templatetags.static import static
 from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils.datastructures import MultiValueDict
+from django.utils import timezone
 
 from apps.core.geo import haversine_metres
 from apps.core.images import motivo_recusa_imagem
@@ -75,12 +78,15 @@ from apps.properties.reference import (
 )
 from apps.properties.selectors import PropertyFilters, PropertyQueryService
 from apps.properties.admin import PropertyImageInlineFormSet
-from apps.properties.services import add_images, build_map_payload
+from apps.properties.services import (
+    PIN_MOVIDO_SEM_CONFIRMACAO,
+    add_images,
+    build_map_payload,
+)
 from apps.properties.validators import (
     LADO_MAXIMO_CLIENTE,
     LIMITE_GB,
     MAX_FOTOS,
-    MIN_FOTOS,
     ORCAMENTO_LOTE_MB,
 )
 
@@ -1235,18 +1241,32 @@ class CuratorDetailEditTests(TestCase):
         self.assertTrue(self.prop.has_garden)
 
     def test_alterar_o_preco_nao_apaga_a_localizacao_verificada(self) -> None:
-        """O pin confirmado pela equipa sobrevive a uma edição de outro campo (§2.3)."""
+        """O pin confirmado pela equipa sobrevive intacto a uma edição de preço (§2.3).
+
+        E sobrevive com a mesma data. Quem muda o preço não inspeccionou nada, e
+        carimbar «verificado hoje» aqui puniria a pessoa que não fez nada de errado
+        com uma verificação que passou a valer menos.
+        """
+        antes = self.prop.location_verified_at
+
         self._post()
 
         self.prop.refresh_from_db()
         self.assertEqual(self.prop.latitude, Decimal("-8.918430"))
         self.assertEqual(self.prop.location_accuracy_m, 25)
         self.assertEqual(self.prop.map_reference, "-8.918430,13.184700")
-        self.assertIsNotNone(self.prop.location_verified_at)
+        self.assertEqual(self.prop.location_verified_at, antes)
 
-    def test_o_pin_pode_ser_corrigido_na_ficha(self) -> None:
-        """A ficha aceita um pin novo, e a confirmação passa a datar de hoje."""
+    def test_mover_o_pin_sem_confirmar_deixa_de_verificar_a_localizacao(self) -> None:
+        """Um clique no mapa não é uma inspecção de satélite, e não assina uma.
+
+        `location_verified_at` é o que a equipa promete ao cliente sobre a
+        fiabilidade da posição (§2.3). Carimbá-la a partir de um clique escrevia
+        essa promessa sobre um ponto que ninguém olhou, e o imóvel mantinha-se
+        publicável. O serviço devolvia à equipa uma confirmação que ela não deu.
+        """
         antes = self.prop.location_verified_at
+        self.assertIsNotNone(antes)
 
         self._post(
             latitude="-8.839000",
@@ -1257,11 +1277,130 @@ class CuratorDetailEditTests(TestCase):
 
         self.prop.refresh_from_db()
         self.assertEqual(self.prop.latitude, Decimal("-8.839000"))
-        self.assertEqual(self.prop.longitude, Decimal("13.289400"))
         self.assertEqual(self.prop.location_accuracy_m, 18)
+        self.assertIsNone(self.prop.location_verified_at)
+
+    def test_a_confirmacao_que_a_equipa_da_e_que_assina_a_localizacao(self) -> None:
+        """Afinar o pin e confirmar por satélite na mesma gravação é o caminho normal.
+
+        É para isto que a caixa existe: a equipa que está a olhar para a imagem
+        marca-a, e a data passa a dizer o dia em que alguém olhou de facto.
+        """
+        self.prop.location_verified_at = None
+        self.prop.save(update_fields=["location_verified_at"])
+        antes = timezone.now()
+
+        self._post(
+            latitude="-8.839000",
+            longitude="13.289400",
+            location_accuracy_m="18",
+            map_reference="-8.839000,13.289400",
+            localizacao_confirmada="on",
+        )
+
+        self.prop.refresh_from_db()
+        self.assertEqual(self.prop.latitude, Decimal("-8.839000"))
+        self.assertEqual(self.prop.longitude, Decimal("13.289400"))
         self.assertEqual(self.prop.map_reference, "-8.839000,13.289400")
         self.assertEqual(self.prop.description, "T3 arejado, com quintal e parque fechado.")
-        self.assertGreater(self.prop.location_verified_at, antes)
+        self.assertIsNotNone(self.prop.location_verified_at)
+        self.assertGreaterEqual(self.prop.location_verified_at, antes)
+
+    def test_a_caixa_nunca_vem_marcada_mesmo_com_o_imovel_verificado(self) -> None:
+        """Pré-marcada, cada alteração de preço reescrevia a data da inspecção.
+
+        A caixa é uma afirmação sobre o que a pessoa está a fazer agora, não o
+        estado do imóvel. Se viesse marcada, gravar o preço bastava para o imóvel
+        dizer que foi verificado hoje — que é a mentira que a regra anterior
+        contava sem a pessoa fazer nada.
+        """
+        self.client.force_login(self.curator)
+
+        html = self.client.get(self.url).content.decode("utf-8")
+        campo = re.search(r'<input[^>]*name="localizacao_confirmada"[^>]*>', html)
+
+        self.assertIsNotNone(campo, "A ficha tem de desenhar a confirmação por satélite.")
+        self.assertNotIn("checked", campo.group(0))
+        self.assertIn("verificada em", html)
+
+    def test_mover_o_pin_de_um_imovel_publicado_exige_confirmacao(self) -> None:
+        """Um imóvel publicado não pode ficar com a confirmação fora.
+
+        Se o pin muda e ninguém confirma, o imóvel saía publicado sem a localização
+        que o §2.3 exige, e a página respondia com um texto sobre publicar. O que a
+        pessoa precisa de ler é o motivo e o que fazer, e a gravação não acontece:
+        um imóvel no ar não se corrige por arrasto.
+        """
+        publicado = make_property(curator=self.curator, owner=self.owner)
+        url = reverse("properties:curator_detail", args=[publicado.reference])
+        antes = publicado.location_verified_at
+        self.client.force_login(self.curator)
+
+        resposta = self.client.post(
+            url,
+            {
+                "title": publicado.title,
+                "type": publicado.type,
+                "purpose": publicado.purpose,
+                "price": "500000",
+                "lease_term_months": "12",
+                "province_ref": publicado.province_ref,
+                "municipality": publicado.municipality,
+                "locality": publicado.locality,
+                "latitude": "-8.839000",
+                "longitude": "13.289400",
+                "location_accuracy_m": "18",
+                "map_reference": "-8.839000,13.289400",
+                "bedrooms": "3",
+                "bathrooms": "2",
+            },
+        )
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, PIN_MOVIDO_SEM_CONFIRMACAO, status_code=200)
+        publicado.refresh_from_db()
+        self.assertEqual(publicado.latitude, Decimal("-8.918430"))
+        self.assertEqual(publicado.location_verified_at, antes)
+        self.assertEqual(publicado.status, Property.Status.PUBLISHED)
+
+    def test_o_pin_de_um_imovel_publicado_corrige_se_a_equipa_confirmar(self) -> None:
+        """Corrigir um pin no ar é possível, e só com a confirmação ao lado.
+
+        A correcção é uma necessidade real — o inspetor põe o ponto no sítio
+        errado. Recusá-la sem saída obrigaria a arquivar e republicar por causa de
+        dois cliques, e a equipa acabava por não corrigir.
+        """
+        publicado = make_property(curator=self.curator, owner=self.owner)
+        url = reverse("properties:curator_detail", args=[publicado.reference])
+        antes = publicado.location_verified_at
+        self.client.force_login(self.curator)
+
+        resposta = self.client.post(
+            url,
+            {
+                "title": publicado.title,
+                "type": publicado.type,
+                "purpose": publicado.purpose,
+                "price": "500000",
+                "lease_term_months": "12",
+                "province_ref": publicado.province_ref,
+                "municipality": publicado.municipality,
+                "locality": publicado.locality,
+                "latitude": "-8.839000",
+                "longitude": "13.289400",
+                "location_accuracy_m": "18",
+                "map_reference": "-8.839000,13.289400",
+                "bedrooms": "3",
+                "bathrooms": "2",
+                "localizacao_confirmada": "on",
+            },
+        )
+
+        self.assertEqual(resposta.status_code, 302)
+        publicado.refresh_from_db()
+        self.assertEqual(publicado.latitude, Decimal("-8.839000"))
+        self.assertEqual(publicado.status, Property.Status.PUBLISHED)
+        self.assertGreaterEqual(publicado.location_verified_at, antes)
 
     def test_arrendar_na_ficha_tambem_exige_prazo(self) -> None:
         """A regra do §2.6 vale na edição, e não só na captação."""
@@ -2028,6 +2167,108 @@ class MarcasDeTemplateTests(TestCase):
                 self.assertTrue(
                     href.startswith("/") or href.startswith("#") or href.startswith("http"),
                     "href que não é caminho: %s" % href[:60],
+                )
+
+
+class OrdemTotalTests(SimpleTestCase):
+    """Uma lista ordenada por uma coluna que não é única não é uma ordem.
+
+    O `created_at` é `auto_now_add` e a base é MySQL: dois registos criados no
+    mesmo instante ficam com a mesma data, e o desempate passa a ser do servidor de
+    base de dados. Numa lista simples isso é uma troca de ordem; numa lista
+    paginada é a mesma linha em duas páginas e outra em nenhuma, e num `[:n]` é um
+    corte que corta o registo errado.
+
+    Estes testes medem o que a base de dados não garante, e valem para todos os
+    modelos do projecto: uma lista de pendentes escrita à mão só apanha os oito
+    que alguém se lembrou de apontar, e o nono entra sem dar erro.
+    """
+
+    # Modelos sem `Meta.ordering`. Não são um defeito por si: uma ordem por omissão
+    # só é um problema onde há lista, e ambos são ordenados na chamada
+    # (`Property.documents.order_by(...)` na ficha) ou não são listados de todoos
+    # (`PropertySubmission` só é criada e lida por `pending_items()`). O nome fica
+    # escrito para que uma lista nova sobre eles não passe em silêncio.
+    SEM_ORDERING = {
+        "properties.PropertyDocument": "a ficha ordena a lista na chamada.",
+        "properties.PropertySubmission": "não é listada: só se cria e se lê o checklist.",
+    }
+
+    def _modelos_do_projecto(self) -> list[type[Model]]:
+        """Os modelos dos apps do projecto, sem os do Django.
+
+        `auth`, `contenttypes`, `sessions` e `admin` não são nossos, e uma
+        actualização do Django que lhes acrescente um modelo sem ordem fecharia
+        um teste OurOwn sobre a nossa lista.
+        """
+        return [
+            modelo
+            for modelo in apps.get_models()
+            if modelo._meta.app_config.name.startswith("apps.")
+        ]
+
+    def _sem_desempate(self, modelo: type[Model]) -> str | None:
+        """Devolve a ordem do modelo quando não fecha em coluna única, ou `None`."""
+        meta = modelo._meta
+        campos = list(meta.ordering or [])
+        if not campos:
+            return None
+        unicos = {
+            f.name for f in meta.concrete_fields if f.unique or f.primary_key
+        }
+        for campo in reversed(campos):
+            nome = campo.lstrip("-").split("__")[0]
+            if nome in unicos:
+                return None
+        return str(campos)
+
+    def test_nenhum_modelo_ficou_por_desempatar(self) -> None:
+        """Toda a ordenação declarada no projecto fecha numa coluna única."""
+        for modelo in self._modelos_do_projecto():
+            with self.subTest(modelo=modelo._meta.label):
+                self.assertIsNone(
+                    self._sem_desempate(modelo),
+                    f"{modelo._meta.label} ordena por {modelo._meta.ordering} sem "
+                    "desempate: acrescenta a chave única no fim.",
+                )
+
+    def test_a_lista_de_modelos_sem_ordem_esta_certa(self) -> None:
+        """A lista de sem `ordering` não cresce nem encolhe sem alguém dizer porquê.
+
+        Um modelo novo entra aqui por omissão, e o teste passa — que é o defeito
+        deste ficheiro: uma lista de pendentes que não pode falhar não é um
+        teste. Comparar os dois lados é o que a torna útil.
+        """
+        sem_ordem = {
+            modelo._meta.label
+            for modelo in self._modelos_do_projecto()
+            if not modelo._meta.ordering
+        }
+
+        self.assertEqual(
+            sem_ordem,
+            set(self.SEM_ORDERING),
+            "Um modelo sem `Meta.ordering` entrou ou saiu. Actualiza SEM_ORDERING "
+            "com o motivo, ou dá-lhe a ordenação.",
+        )
+
+    def test_o_id_fecha_a_ordem_de_quem_empata_no_tempo(self) -> None:
+        """`-created_at` sozinho não é ordem: é o que fez a lista da equipa tremer.
+
+        O desempate tem de ser a chave primária e vir no sentido da lista. `-id`
+        numa lista decrescente põe o registo mais recente em primeiro, que é o
+        que quem lê a fila espera; `id` numa crescente põe o mais antigo, que é o
+        que a triagem espera.
+        """
+        for modelo in self._modelos_do_projecto():
+            campos = list(modelo._meta.ordering or [])
+            if not campos or "created_at" not in campos and "updated_at" not in campos:
+                continue
+            with self.subTest(modelo=modelo._meta.label):
+                self.assertTrue(
+                    campos[-1] in {"id", "-id"},
+                    f"{modelo._meta.label} ordena por {campos} e desempata por "
+                    f"{campos[-1]}: a chave tem de ser a primária.",
                 )
 
 

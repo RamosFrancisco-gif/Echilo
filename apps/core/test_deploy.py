@@ -52,6 +52,7 @@ PERGUNTA = (
     "'cache_timeout_fora': s.CACHES['default'].get('TIMEOUT'),"
     "'armazenamento': s.STORAGES['default']['BACKEND'],"
     "'documentacao': s.MEDIA_DOCUMENTACAO_BACKEND,"
+    "'perfis': s.MEDIA_PERFIS_BACKEND,"
     "'hosts': s.ALLOWED_HOSTS,"
     "'timeout_ia': s.ECHILO_AI_TIMEOUT,"
     "'tentativas_ia': s.ECHILO_AI_MAX_RETRIES,"
@@ -296,12 +297,27 @@ class EntregaDeFicheirosTests(SimpleTestCase):
     """O que a Cloudinary guarda tem de ser o que a produção declara guardar."""
 
     def test_a_producao_guarda_na_nuvem_e_nao_no_disco(self) -> None:
-        """As duas respostas têm de ser as duas, e não só a primeira."""
+        """As três respostas têm de ser as três, e não só a primeira."""
         resposta = _perguntar()
         self.assertEqual(resposta["armazenamento"], "apps.core.storage.CloudinaryImageStorage")
         self.assertEqual(
             resposta["documentacao"], "apps.core.storage.CloudinaryDocumentStorage"
         )
+        self.assertEqual(resposta["perfis"], "apps.core.storage.CloudinaryAvatarStorage")
+
+    def test_o_retrato_de_perfil_vai_para_a_nuvem_em_producao(self) -> None:
+        """Um `MEDIA_ROOT` de uma função apaga o ficheiro antes de o dia seguinte.
+
+        O retrato é público, e por isso tem o mesmo problema da capa: num disco
+        efémero a fotografia entrava, o formulário respondia 302, e o avatar
+        desaparecia sem um erro em lado nenhum. É a diferença entre o `default` e
+        a setting do campo: o `default` ser a nuvem não diz nada sobre a storage que
+        o `photo` escolhe.
+        """
+        resposta = _perguntar()
+
+        self.assertIn("Cloudinary", resposta["perfis"])
+        self.assertNotIn("FileSystem", resposta["perfis"])
 
     def test_a_documentacao_legal_nao_partilha_o_backend_publico(self) -> None:
         """As fotografias e as escrituras não podem ter o mesmo destino.

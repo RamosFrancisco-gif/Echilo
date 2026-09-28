@@ -206,9 +206,17 @@ class Command(BaseCommand):
         limit = int(options["limit"])
         created = 0
         for index, spec in enumerate(CATALOGUE[:limit], start=1):
-            reference = next_reference(province_code=str(spec["province_ref"]))
-            if Property.objects.filter(reference=reference).exists():
+            if self._ja_semeado(spec):
+                # O guarda vivia na referência, e a referência nunca está ocupada:
+                # `next_reference()` salta para a primeira livre, de propósito. Era
+                # código morto, e o comando publicava o catálogo inteiro outra vez
+                # a cada execução — o dobro dos imóveis de demonstração, com
+                # proprietário novo, e sem uma linha que dissesse o que tinha
+                # acontecido. Identificar a linha pelo que ela é — o título e a
+                # província do catálogo — é o que torna a semeadura repetível.
+                self.stdout.write(f"  (já existe)  {spec['title']}")
                 continue
+            reference = next_reference(province_code=str(spec["province_ref"]))
             prop = self._property(reference=reference, spec=spec, curator=curator, owner_index=index)
             self._publish(prop=prop, agent=agent, curator=curator)
             created += 1
@@ -232,6 +240,13 @@ class Command(BaseCommand):
             deleted, _ = model.objects.all().delete()
             if deleted:
                 self.stdout.write(f"  removidos {deleted} registos de {model.__name__}")
+
+    def _ja_semeado(self, spec: dict[str, object]) -> bool:
+        """Diz se esta linha do catálogo de demonstração já está na base de dados."""
+        return Property.objects.filter(
+            title=str(spec["title"]),
+            province_ref=str(spec["province_ref"]),
+        ).exists()
 
     def _palavra_passe(self, *, em_producao: bool) -> str:
         """Dá a palavra-passe das contas de demonstração, sem a escrever no código.

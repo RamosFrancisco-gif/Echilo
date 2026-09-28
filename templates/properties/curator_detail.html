@@ -142,6 +142,29 @@
             {% include "partials/form_field.html" with field=form.location_accuracy_m %}
             {% include "partials/form_field.html" with field=form.map_reference %}
           </div>
+          {% comment %}
+            A confirmação é a caixa, e não o pin. O pin sai de um clique no mapa, e
+            um clique não é uma inspecção de satélite (§2.3): carimbar a data a
+            partir dele escrevia «verificado» sobre um ponto que ninguém olhou.
+            Sem esta caixa, afinar o pin deixava o imóvel publicado sem poder
+            voltar a ser publicado, porque a ficha era a única que assinava a
+            verificação.
+
+            A caixa nunca vem marcada, mesmo quando o imóvel já está verificado: a
+            data é a de uma inspecção, e pré-marcá-la faria cada alteração de preço
+            reescrever a data de hoje sobre uma verificação de há seis meses.
+          {% endcomment %}
+          {% include "partials/form_field.html" with field=form.localizacao_confirmada %}
+          {% if property.location_verified_at %}
+            <p class="field__help">
+              Localização verificada em {{ property.location_verified_at|date:"d/m/Y" }}.
+            </p>
+          {% else %}
+            <p class="field__help">
+              Este imóvel ainda não tem a localização confirmada por satélite, e por
+              isso não pode ser publicado.
+            </p>
+          {% endif %}
           <div class="grid-2">
             {% include "partials/form_field.html" with field=form.bedrooms %}
             {% include "partials/form_field.html" with field=form.bathrooms %}

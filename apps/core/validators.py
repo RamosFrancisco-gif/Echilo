@@ -26,6 +26,30 @@ MAXIMUM_PLAUSIBLE_AGE = 120
 MIN_SEARCH_RADIUS_M = 100
 MAX_SEARCH_RADIUS_M = 50_000
 
+# O tamanho de um pedido é um limite da plataforma, e não do Django. A Vercel
+# recusa corpos acima de 4,5 MB na edge, antes de o Django ver a requisição, e o
+# limite não é configurável — nem por `vercel.json`, nem por settings, nem por
+# plano. A resposta é um 413 terso, sem página nem traceback.
+#
+# Vive aqui, e não em cada app que envia ficheiros, porque é a mesma resposta
+# para as fotografias dos imóveis e para o retrato de perfil: cada app escrever o
+# seu número é a forma de os dois divergirem sem que nada diga que medem a mesma
+# coisa. Um tecto de 5 MB num formulário e um pedido que morre aos 4,5 dá um
+# formulário que aceita o que o transporte não deixa passar.
+LIMITE_PEDIDO_MB = 4.5
+
+# O que sobra para as fronteiras do multipart e para o resto do formulário. Um
+# orçamento escrito em cima do limite morre com o ficheiro seguinte, e a margem é
+# mais barata do que a investigação.
+MARGEM_PEDIDO_MB = 0.5
+
+# O maior ficheiro único que cabe num pedido, em megabytes inteiros. Inteiro
+# porque este é um tecto de validação, e a validação faz contas de bytes com ele;
+# uma fracção aqui não arredonda, e `3.5 * 1024 * 1024` é um `float` a
+# comparar-se com um tamanho de ficheiro. Os orçamentos — que se dividem por
+# quinze — são outra constante, e podem ser fracções à vontade.
+LIMITE_UPLOAD_MB = int(LIMITE_PEDIDO_MB - MARGEM_PEDIDO_MB)
+
 
 def validate_angolan_phone(value: str) -> None:
     """Aceita apenas telefones angolanos no formato +244 9XX XXX XXX (§1)."""

@@ -158,27 +158,51 @@ def create_property(
     return prop
 
 
+PIN_MOVIDO_SEM_CONFIRMACAO = (
+    "Mover o pin tira ao imóvel a confirmação por satélite, e um imóvel publicado não "
+    "pode ficar sem ela. Confirme o ponto novo na imagem de satélite e marque a caixa "
+    "«Confirmei a localização por satélite» antes de gravar."
+)
+
+
 @transaction.atomic
-def apply_quick_edit(prop: Property, fields: dict[str, object]) -> Property:
-    """Aplica a edição rápida da ficha interna e data o que mudou de lugar.
+def apply_quick_edit(
+    prop: Property,
+    fields: dict[str, object],
+    *,
+    localizacao_confirmada: bool = False,
+) -> Property:
+    """Aplica a edição rápida da ficha interna e decide o que a mudança tira.
 
     É o serviço, e não a view, que decide quando a posição deixa de estar
-    verificada. `location_verified_at` é quando a equipa confirmou o ponto
-    (§2.3), e confirmar é o que o formulário faz: se as coordenadas mudam, a
-    confirmação antiga é de outro ponto e não pode continuar a datar o novo.
+    verificada. `location_verified_at` é quando a equipa inspeccionou o ponto por
+    satélite (§2.3), e largar o pin num mapa não é uma inspecção: carimbar a data
+    a partir de um clique escrevia «verificado por satélite» sobre um ponto que
+    ninguém olhou, e o imóvel passava a porta de publicação com uma verificação
+    que não aconteceu.
 
-    O pin é a única coisa que a equipa confirma por inspecção. Os restantes campos
-    mudam sem que isso diga nada sobre a localização, que é o motivo de a regra
-    olhar só para o par.
+    Por isso o pin é a única coisa que a ficha apaga, e confirmar é um acto
+    separado e explícito — a caixa. A equipa que está a olhar para a imagem de
+    satélite marca-a na mesma gravação; quem altera o preço não a vê sequer. A data
+    só muda quando alguém afirma que confirma, e não por arrasto. Os restantes
+    campos mudam sem que isso diga nada sobre a localização, que é o motivo de a
+    regra olhar só para o par.
     """
     moved = any(
         getattr(prop, campo) != fields.get(campo) for campo in ("latitude", "longitude")
     )
+    if moved and not localizacao_confirmada and prop.status == prop.Status.PUBLISHED:
+        # Sem isto, a `clean()` do modelo recusava a gravação com um texto sobre
+        # publicar, numa página que não está a publicar nada. O motivo e o que
+        # fazer são diferentes, e quem lê a mensagem precisa dos dois.
+        raise ValidationError(PIN_MOVIDO_SEM_CONFIRMACAO)
     for campo, valor in fields.items():
         if hasattr(prop, campo):
             setattr(prop, campo, valor)
-    if moved:
+    if localizacao_confirmada:
         prop.location_verified_at = timezone.now()
+    elif moved:
+        prop.location_verified_at = None
     prop.full_clean(exclude=["reference", "status", *fields])
     prop.save()
     return prop

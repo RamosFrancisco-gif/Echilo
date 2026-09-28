@@ -37,6 +37,9 @@ from apps.core.geo import (
     haversine_metres,
 )
 from apps.core.validators import (
+    LIMITE_PEDIDO_MB,
+    LIMITE_UPLOAD_MB,
+    MARGEM_PEDIDO_MB,
     MAX_SEARCH_RADIUS_M,
     MIN_SEARCH_RADIUS_M,
     age_in_years,
@@ -1461,6 +1464,58 @@ class AreaSearchValidatorTests(SimpleTestCase):
         """A mensagem tem de ser legível por quem a lê no formulário."""
         with self.assertRaisesMessage(ValidationError, "50 km"):
             validate_search_radius_m(500_000)
+
+
+class LimiteDoPedidoTests(SimpleTestCase):
+    """Nenhum tecto de ficheiro pode ser maior do que o pedido que o transporta.
+
+    A Vercel recusa o pedido na edge aos 4,5 MB, e recusa-o antes de o Django ver
+    a requisição. Um formulário que aceita 5 MB tem uma validação que nunca
+    corre, e o aviso que a pessoa recebe é um «Content Too Large» sem página.
+    """
+
+    def test_o_tecto_de_upload_cabe_no_pedido(self) -> None:
+        self.assertLess(LIMITE_UPLOAD_MB, LIMITE_PEDIDO_MB)
+        self.assertGreater(LIMITE_UPLOAD_MB, 0)
+
+    def test_o_tecto_de_upload_sao_megabytes_inteiros(self) -> None:
+        """A validação compara com um tamanho de ficheiro, e um `float` não arredonda.
+
+        `motivo_recusa_imagem(limite_mb=3.5)` escreve `3.5 * 1024 * 1024`, que é um
+        `float` a comparar-se com os bytes de um ficheiro. Funciona, e continua a
+        funcionar quando o valor deixa de caber no que o browser envia.
+        """
+        self.assertIsInstance(LIMITE_UPLOAD_MB, int)
+        self.assertEqual(LIMITE_UPLOAD_MB * 1024 * 1024, 4 * 1024 * 1024)
+
+    def test_a_margem_e_o_que_fica_entre_o_tecto_e_o_pedido(self) -> None:
+        """A margem é o espaço do multipart e do resto do formulário."""
+        self.assertGreaterEqual(
+            LIMITE_UPLOAD_MB + MARGEM_PEDIDO_MB, LIMITE_PEDIDO_MB - 0.001
+        )
+
+    def test_nenhum_formulario_de_upload_passa_do_pedido(self) -> None:
+        """Os tectos que escrevem `5` no `help_text` aceitam o que a plataforma recusa."""
+        from apps.accounts.forms import LIMITE_FOTO_PERFIL_MB
+        from apps.properties.validators import ORCAMENTO_LOTE_MB
+
+        for nome, tecto in (
+            ("fotografia de perfil", LIMITE_FOTO_PERFIL_MB),
+            ("lote de fotografias", ORCAMENTO_LOTE_MB),
+        ):
+            with self.subTest(ficheiro=nome):
+                self.assertLessEqual(tecto, LIMITE_UPLOAD_MB)
+
+    def test_o_orcamento_do_lote_fica_abaixo_do_tecto(self) -> None:
+        """O orçamento é o que se persegue, e o tecto é onde a validação corta.
+
+        São números diferentes com trabalhos diferentes: o orçamento divide-se por
+        quinze, e é por isso que é uma fracção. Igualá-los ao tecto faz o orçamento
+        estragar no primeiro ficheiro que não cabe na divisão.
+        """
+        from apps.properties.validators import ORCAMENTO_LOTE_MB
+
+        self.assertLess(ORCAMENTO_LOTE_MB, LIMITE_UPLOAD_MB)
 
 
 class InvariantNumberTests(SimpleTestCase):

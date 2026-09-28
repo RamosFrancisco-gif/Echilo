@@ -19,5 +19,5 @@ def site_context(request: HttpRequest) -> dict[str, Any]:
         "manager_emails": settings.MANAGER_EMAILS,
         "static_assets": static,
         "current_user": user,
-        "is_team_member": user.is_authenticated and user.role != user.Role.CLIENT,
+        "is_team_member": user.is_authenticated and user.is_team_role,
     }

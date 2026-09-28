@@ -275,7 +275,13 @@ class PropertyQueryService:
                 "latitude",
                 "longitude",
                 "published_at",
-            ).order_by("-published_at")[: limit + 1]
+            # O `-id` é o desempate que falta e não é cosmetic. `published_at` é a
+            # data, e dois imóveis publicados no mesmo segundo empatam; sem uma
+            # coluna única a desempatar, o MySQL devolve o empate por ordem
+            # arbitrária e o corte de `limit` corta um imóvel em vez de outro. O
+            # painel diz quantos ficaram de fora, e passa a dizer um número de
+            # quantos ficaram *mesmo*.
+            ).order_by("-published_at", "-id")[: limit + 1]
         )
         if len(marked) <= limit:
             return marked, len(marked)
@@ -328,11 +334,17 @@ class PropertyQueryService:
 
     @classmethod
     def featured(cls, *, limit: int = 6) -> QuerySet[Property]:
-        """Imóveis em destaque para a página inicial, sem custo extra de consultas."""
+        """Imóveis em destaque para a página inicial, sem custo extra de consultas.
+
+        O `-id` desempata o que a data e a contagem de photographs não desempatam:
+        seis imóveis com as mesmas fotografias e publicados no mesmo segundo são um
+        empate que o MySQL resolve como lhe apetece, e a home mudava de seis
+        imóveis entre dois pedidos sem que nada no código tivesse mudado.
+        """
         return (
             cls.base_queryset()
             .annotate(photo_total=Count("images"))
-            .order_by("-published_at", "-photo_total")[:limit]
+            .order_by("-published_at", "-photo_total", "-id")[:limit]
         )
 
     @classmethod

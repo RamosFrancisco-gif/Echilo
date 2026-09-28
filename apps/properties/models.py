@@ -50,7 +50,7 @@ class OwnerProfile(models.Model):
     class Meta:
         verbose_name = "proprietário"
         verbose_name_plural = "proprietários"
-        ordering = ["full_name"]
+        ordering = ["full_name", "id"]
 
     def __str__(self) -> str:
         return self.full_name
@@ -217,7 +217,12 @@ class Property(models.Model):
     class Meta:
         verbose_name = "imóvel"
         verbose_name_plural = "imóveis"
-        ordering = ["-published_at", "-created_at"]
+        # O `-id` fecha a ordem em total. Duas datas não são uma ordem: um imóvel
+        # publicado e registado no mesmo instante que outro empata em ambas as
+        # colunas, e o catálogo — que pagina — entrega o empate ao MySQL, que o
+        # resolve como lhe apetece. Um cartão repetido e outro ausente é um
+        # catálogo que mente sobre o que tem.
+        ordering = ["-published_at", "-created_at", "-id"]
         indexes = [
             models.Index(fields=["status", "purpose"], name="prop_status_purpose_idx"),
             models.Index(fields=["status", "province_ref"], name="prop_status_province_idx"),
@@ -443,7 +448,13 @@ class PropertyStatusEvent(models.Model):
     class Meta:
         verbose_name = "evento de estado"
         verbose_name_plural = "eventos de estado"
-        ordering = ["-created_at"]
+        # O `-id` desempata o que a data não desempata. Duas transições registadas
+        # no mesmo microsegundo são habituais — o `auto_now_add` grava microssegundos
+        # e a base de dados é MySQL — e a ordem entre elas é arbitrária sem uma
+        # coluna única. Numa lista paginada isso é pior do que uma ordem trocada: a
+        # mesma transição aparece em duas páginas e outra nunca aparece, e o §2.8
+        # diz que o histórico regista todas as transições.
+        ordering = ["-created_at", "-id"]
 
     def __str__(self) -> str:
         return f"{self.property.reference}: {self.from_status} → {self.to_status}"
@@ -503,7 +514,7 @@ class DocumentAccessLog(models.Model):
     class Meta:
         verbose_name = "acesso a documento"
         verbose_name_plural = "acessos a documentos"
-        ordering = ["-created_at"]
+        ordering = ["-created_at", "-id"]
 
     def __str__(self) -> str:
         if self.document_id and self.document:
@@ -557,7 +568,7 @@ class PropertyDeletion(models.Model):
     class Meta:
         verbose_name = "imóvel apagado"
         verbose_name_plural = "imóveis apagados"
-        ordering = ["-created_at"]
+        ordering = ["-created_at", "-id"]
 
     def __str__(self) -> str:
         return f"{self.reference}: {self.title}"

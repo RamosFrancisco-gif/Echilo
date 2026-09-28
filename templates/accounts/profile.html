@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load echilo_format %}
 
 {% block title %}O seu perfil - conta{% endblock %}
 
@@ -64,7 +65,25 @@
       </aside>
 
       <div class="settings__main">
-        <form class="settings-form" method="post" enctype="multipart/form-data" novalidate>
+        {# O redutor de imagens lê estes `data-` para reduzir o retrato antes de o
+           enviar: sem ele, um retrato de telemóvel de 4 MB entra num pedido que a
+           plataforma recusa, e o `5` do `LIMITE_FOTO_PERFIL_MB` é um número que
+           a validação aceita e o transporte não. O `data-input-ficheiros` diz qual
+           é o input, porque o mesmo redutor serve as fotografias dos imóveis, que
+           se chamam `images`.
+
+           Os números saem por `coordinate` (§2.13): a interface é `pt-AO`, e o
+           `0.5` escrevia-se `0,5` — que o `Number()` do redutor lê como `NaN`, e
+           um redutor com orçamento `NaN` não reduz nada. #}
+        <form
+          class="settings-form"
+          method="post"
+          enctype="multipart/form-data"
+          novalidate
+          data-orcamento-mb="{{ orcamento_perfil_mb|coordinate }}"
+          data-lado-maximo="{{ lado_maximo_perfil_cliente|coordinate }}"
+          data-input-ficheiros="photo"
+        >
           {% csrf_token %}
 
           {% if form.non_field_errors %}

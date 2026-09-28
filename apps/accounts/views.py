@@ -18,6 +18,7 @@ from django.views.generic import FormView, ListView
 from apps.core.pagination import PAGINA_PADRAO
 from apps.core.permissions import require_admin
 from apps.core.ratelimit import check_rate_limit, reset_rate_limit
+from apps.properties.validators import config_perfil
 
 from .forms import (
     ClientCreateForm,
@@ -199,8 +200,15 @@ class ProfileView(FormView):
         isso dá um formulário **sem erros**: a página de uma palavra-passe
         recusada tem de mostrar os campos de dados sem os dar como errados,
         porque ninguém os tocou.
+
+        Os números do retrato entram pelo mesmo caminho do `upload_config` dos
+        imóveis, e pelo mesmo motivo: o `data-orcamento-mb` do formulário é o
+        contrato entre o Python e o redutor do browser, e um meio megabyte
+        escrito à mão no template é um meio megabyte que diverge do `5` do
+        `LIMITE_FOTO_PERFIL_MB` sem que nada diga que são a mesma regra.
         """
         context = super().get_context_data(**kwargs)
+        context.update(config_perfil())
         context.setdefault("formulario", "dados")
         context.setdefault("senha_form", PasswordChangeForm(user=self.request.user))
         context.setdefault("view_title", "O seu perfil")

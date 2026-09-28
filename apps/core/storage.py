@@ -59,6 +59,33 @@ TRANSFORMACAO_CAPA = {
 
 FORMATOS_IMAGEM = ("jpg", "jpeg", "png", "webp")
 
+# O lado do retrato vive aqui e não em `images.py` porque são os dois que
+# precisam dele e o grafo de imports já vai deste para aquele: a redução no
+# servidor e a transformação no envio têm de concordar no número, e um 512 aqui e
+# um 512 lá é um 512 que diverge na próxima alteração a um deles.
+#
+# O retrato é mostrado a 28 px no cabeçalho e a 72 px na página do perfil, e nunca
+# a mais do que isso. O lado é generoso o dobro do maior sítio onde aparece, para
+# que um ecrã de densidade alta não espreite nos pixels, e não porque a
+# fotografia precise de ser grande.
+LADO_RETRATO_PX = 512
+
+# O retrato segue uma transformação própria porque não é uma capa: `crop: limit`
+# numa cara guarda a imagem inteira dentro de um quadrado, e o círculo do CSS
+# corta o que sobrou. `fill` com gravidade de rosto faz o corte aqui, uma vez, e é
+# o único sítio onde a Cloudinary conhece o alinhamento de uma fotografia vertical.
+# `fetch_format: jpg` porque a pasta dos perfis não leva PNG: um PNG de 512 px de
+# uma cara serve 40 KB a 72 px, e o ficheiro mais pesado de um avatar é sempre o
+# que ninguém precisou de ser PNG.
+TRANSFORMACAO_RETRATO = {
+    "width": LADO_RETRATO_PX,
+    "height": LADO_RETRATO_PX,
+    "crop": "fill",
+    "gravity": "face",
+    "quality": "auto:good",
+    "fetch_format": "jpg",
+}
+
 # O `accept` do input de ficheiros quer MIME types, e não extensões: o browser
 # filtra o diálogo de escolha por aquilo que o campo diz, e `accept="jpg,png"`
 # não filda nada. Vive ao lado de `FORMATOS_IMAGEM` para que os dois não
@@ -144,12 +171,18 @@ def _url_de_entrega(identificador: str, **opcoes: Any) -> str:
 
 @deconstructible
 class _BaseCloudinary(Storage):
-    """O que as duas variantes fazem igual: enviar, nomear e apagar."""
+    """O que as variantes fazem igual: enviar, nomear e apagar."""
 
     resource_type = "image"
     delivery_type = "upload"
     permitted_extensions: frozenset[str] = frozenset()
     pasta = ""
+    # A transformação do envio é um atributo de classe e não um `if` dentro do
+    # `save()` porque as imagens não pedem a mesma coisa: a capa de um imóvel
+    # entra aos 2000 px porque é mostrada a toda a largura, e um retrato aos 512 px
+    # porque nunca passa de 72. Com a transformação escrita à mão no `save()`, a
+    # segunda storage tem de reescrever o método inteiro para usar a sua.
+    transformacao: dict[str, object] | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         _configurar()
@@ -191,7 +224,8 @@ class _BaseCloudinary(Storage):
             opcoes["folder"] = self._pasta
         if self.resource_type == "image":
             opcoes["allowed_formats"] = list(FORMATOS_IMAGEM)
-            opcoes["transformation"] = TRANSFORMACAO_CAPA
+            if self.transformacao is not None:
+                opcoes["transformation"] = self.transformacao
         else:
             opcoes["allowed_formats"] = sorted(
                 ext.lstrip(".") for ext in self.permitted_extensions
@@ -243,6 +277,7 @@ class CloudinaryImageStorage(_BaseCloudinary):
     delivery_type = "upload"
     pasta = "echilo/imoveis"
     permitted_extensions = EXTENSOES_IMAGEM
+    transformacao = TRANSFORMACAO_CAPA
 
     def url(self, name: str) -> str:
         """URL de entrega directa: uma fotografia de capa é o produto a mostrár-se."""
@@ -263,6 +298,28 @@ class CloudinaryImageStorage(_BaseCloudinary):
             type=self.delivery_type,
             transformation=[{"width": largura, "crop": "limit", "quality": "auto"}],
         )
+
+
+class CloudinaryAvatarStorage(CloudinaryImageStorage):
+    """Retratos de perfil: públicos, pequenos e na sua própria pasta.
+
+    Herda de `CloudinaryImageStorage` porque um retrato é público e mostrado em todas
+    as páginas e não tem nada de sensível — o que muda é o tamanho e a pasta.
+
+    A pasta própria é o motivo de existirem três storages. Com a pasta partilhada,
+    `upload_to="perfis/%Y/%m/"` no campo não faria nada: o `save()` usa a pasta da
+    storage e ignora o `upload_to`, e todos os retratos acabavam em `echilo/imoveis`,
+    ao lado das capas. Não colidiam — o `public_id` é um `uuid4` — mas uma limpeza
+    por pasta levava os retratos com as fotos dos imóveis, e a pasta deixava de
+    dizer o que lá estava.
+
+    Os retratos que já existam **não** mudam de sítio: a pasta decide o envio, e o
+    `public_id` guardado continua a entregar a imagem onde ela já está. Sem
+    migrar ficheiros, e sem partir uma fotografia que alguém já tem no perfil.
+    """
+
+    pasta = "echilo/perfis"
+    transformacao = TRANSFORMACAO_RETRATO
 
 
 class CloudinaryDocumentStorage(_BaseCloudinary):
@@ -328,4 +385,20 @@ def storage_documentacao() -> Storage:
     caminho = getattr(settings, "MEDIA_DOCUMENTACAO_BACKEND", "")
     if caminho.endswith("CloudinaryDocumentStorage"):
         return CloudinaryDocumentStorage()
+    return FileSystemStorage()
+
+
+def storage_perfis() -> Storage:
+    """Backend dos retratos, escolhido pelas settings.
+
+    Repete a assinatura de `storage_documentacao` por causa do mesmo motivo: um
+    campo serializado guarda a instância, e guardar a credencial dentro da
+    migration seria guardar o segredo de todos os ambientes a correrem.
+
+    Sem isto o `photo` seguia o `STORAGES["default"]`, que é a storage das
+    capas — e em produção seria o ficheiro certo na pasta errada.
+    """
+    caminho = getattr(settings, "MEDIA_PERFIS_BACKEND", "")
+    if caminho.endswith("CloudinaryAvatarStorage"):
+        return CloudinaryAvatarStorage()
     return FileSystemStorage()

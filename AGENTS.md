@@ -202,6 +202,35 @@ número que mede a fiabilidade da inspecção.
   catálogo. Duas redações das mesmas regras de zoom divergem, e a segunda é a que
   ninguém actualiza.
 
+#### Mover o pin limpa a inspecção, e confirmar é um acto da equipa
+
+`apply_quick_edit()` carimbava `location_verified_at` em **qualquer** gravação. Bastava
+mover o pin dois metros para a base dizer que o imóvel tinha sido verificado por
+satélite hoje, sem ninguém ter visto o mapa. E o inverso também estava mal: limpar o
+pin sem forma de o confirmar deixava o imóvel impedido de publicar para sempre, porque
+a ficha interna era o único sítio do código que escreve aquele campo.
+
+A correcção são duas decisões, e nenhuma delas é opcional.
+
+- **Mover o pin põe `location_verified_at` a `NULL`.** A caixa põe a data de agora.
+  Um carimbo que se renova sozinho não mede a inspecção; mede a última edição.
+- **Confirmar é uma caixa de selecção, `localizacao_confirmada`, e vem sempre
+  desmarcada.** Pré-marcada, cada alteração de preço reescrevia a data da
+  inspecção — que era exactamente o defeito, com outro nome. A data que está
+  escrita ao lado ("verificado em dd/mm/aaaa") é o estado actual; a caixa é a
+  intenção de hoje.
+- **O campo não é gravado.** Vive em `CAMPOS_NAO_GUARDADOS` e é lido por
+  `confirmou_localizacao()` — o nome do método não pode ser o do campo, ou o
+  `getattr` do formulário encontra a `BooleanField` em vez do método.
+- **Um imóvel `PUBLISHED` com o pin movido e sem confirmação é recusado.**
+  `apply_quick_edit()` levanta `ValidationError` e a view devolve 200 com
+  `form.add_error(None, PIN_MOVIDO_SEM_CONFIRMACAO)`. Publicar continua possível:
+  a equipa marca a caixa e grava. O que não acontece é o imóvel no ar mudar de
+  sítio sem a equipa dizer que mudou.
+- **Perder a confirmação sem querer avisa.** A vista devolve um
+  `messages.warning`, porque depois de gravar a ficha já não mostra o estado da
+  confirmação e o silêncio parece uma decisão.
+
 ### 2.4 Atendimento híbrido
 
 
@@ -714,7 +743,7 @@ O mapa é uma melhoria progressiva, e o formulário não depende dele:
 
 | Perfil (`User.role`) | Pode | Não pode |
 | --- | --- | --- |
-| `CLIENT` | Navegar, guardar favoritos, pedir visita, enviar mensagem, fazer oferta | Criar imóveis, ver imóveis não publicados, moderar |
+| `CLIENT` | Navegar, pedir visita, enviar mensagem, fazer oferta | Criar imóveis, ver imóveis não publicados, moderar |
 | `CURATOR` | Tudo o que `CLIENT` faz + criar/editar imóveis, submeter a validação | Aprovar publicação final, criar contas |
 | `AGENT` | Tudo o que `CURATOR` faz + validar documentos, confirmar visitas, responder conversas escaladas | Alterar permissões, criar contas |
 | `ADMIN` | Tudo | — |
@@ -725,6 +754,22 @@ Regras:
 - Promoção de perfil é feita em `/admin` ou por `MANAGER_EMAILS` nas settings.
 - Nenhum `CLIENT` acede a `/admin`. Devolvir 403.
 - O `client_staff` não existe: um `CLIENT` autenticado é sempre `is_staff=False`.
+
+#### "É da equipa" é uma lista branca, e vive num sítio só
+
+`User.is_team_role` é a única definição: `self.role in {CURATOR, AGENT, ADMIN}`.
+`User.save()`, `apps/core/permissions.py` e `apps/core/context.py` leem essa
+propriedade, e nada escreve a regra outra vez.
+
+A regra estava escrita em **três** sítios e os três eram lista negra — "não é
+`CLIENT`". Uma lista negra é uma lista de excepções a manter, e o primeiro perfil
+novo que ninguém estranha é uma porta aberta sem ninguém ter escrito código de
+acesso: a lista negra devolvia acesso a qualquer `role` desconhecido, incluindo `""`.
+
+A lista branca tem o custo oposto — um perfil novo nasce sem acesso e alguém tem de
+o escrever de propósito — e é o custo certo numa coisa que decide quem entra no
+painel. `ProfilePermissionTests` cobre os quatro perfis actuais e os três valores que
+não são perfis (`"owner"`, `"TERCEIRO"`, `""`).
 
 ### 3.1 O menu é uma resposta ao perfil, e a página tem de concordar com ele
 

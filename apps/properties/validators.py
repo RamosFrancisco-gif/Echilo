@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from django.core.exceptions import ValidationError
 
+from apps.core.storage import LADO_RETRATO_PX
+
 # Menos do que isto e a ficha não é uma ficha: é um anúncio sem percurso. Mais
 # do que isto e o peso da página passa a custar mais ao cliente do que o imóvel
 # lhe rende, e ninguém faz dezasseis Photographs para arrendar um quarto.
@@ -23,23 +25,21 @@ LIMITE_GB = 5
 # O orçamento do lote é o que o pedido inteiro pode pesar, e não é a mesma
 # pergunta que o `LIMITE_GB`: aquele é o que UMA fotografia pode pesar, este é o
 # que as quinze pesam em conjunto. São dois tectos, e o que os liga é a
-# plataforma.
+# plataforma — o porquê do limite de 4,5 MB e da margem está em
+# `apps.core.validators`, que é onde vive, porque é o mesmo para todos os pedidos.
 #
-# A Vercel recusa corpos de pedido acima de 4,5 MB na edge, antes de o Django ver
-# a requisição, e o limite não é configurável — nem por `vercel.json`, nem por
-# settings, nem por plano. A resposta é um 413 terso, sem página nem traceback: a
-# equipa escolhe quinze fotografias, carrega no botão e lê «Content Too Large»,
-# que não diz o que fazer nem qual o limite.
+# Uma validação que nunca chega a correr não protege ninguém, e fingir que protege
+# é o que dá a certeza de que o limite do servidor é o do Django: a equipa escolhe
+# quinze fotografias, carrega no botão e lê «Content Too Large», que não diz o que
+# fazer nem qual o limite.
 #
-# Por isso o `DATA_UPLOAD_MAX_MEMORY_SIZE` do Django é irrelevante para este
-# problema, e é maior do que o orçamento: o pedido morre na plataforma antes de
-# o tecto do Django ter ordem para disparar. Uma validação que nunca chega a
-# correr não protege ninguém, e fingir que protege é o que dá a certeza de que o
-# limite do servidor é o do Django.
+# Os 3,5 MB deixam ~230 KB por fotografia com o lote cheio — o suficiente para os
+# 1600 px de `LADO_MAXIMO_CLIENTE`, que é mais do que a ficha mostra.
 #
-# Os 3,5 MB deixam margem para as fronteiras do multipart e para o resto do
-# formulário, e dão ~230 KB por fotografia com o lote cheio — o suficiente para
-# os 1600 px de `LADO_MAXIMO_CLIENTE`, que é mais do que a ficha mostra.
+# Fica abaixo de `LIMITE_UPLOAD_MB` de propósito: este é o orçamento que o browser
+# persegue, e a diferença para o tecto é a folga para quando a divisão por quinze
+# não dá a cada fotografia o que a conta promete. Um orçamento escrito com o mesmo
+# número do tecto é um orçamento que o primeiro ficheiro a mais estraga.
 ORCAMENTO_LOTE_MB = 3.5
 
 # O lado com que o browser reconstrói a fotografia antes de a enviar. O servidor
@@ -81,4 +81,32 @@ def upload_config() -> dict[str, float]:
     return {
         "orcamento_lote_mb": ORCAMENTO_LOTE_MB,
         "lado_maximo_cliente": LADO_MAXIMO_CLIENTE,
+    }
+
+
+# O retrato é um ficheiro só, e por isso o orçamento não é dividido: é o peso
+# máximo que um `POST` de perfil pode levar. Meio megabyte é uma ordem de grandeza
+# abaixo do limite do pedido, o que deixa o formulário inteiro — dados,
+# identificação e o token de CSRF — a caminho de uma folga que não existe.
+ORCAMENTO_PERFIL_MB = 0.5
+
+# O lado com que o browser reconstrói o retrato antes de o enviar. É o mesmo número
+# que o servidor guarda, e não um parecido: o browser reduzir para 1600 e o
+# servidor recusar acima de 8000 produz um retrato entregue a 512 que ainda pesava
+# meio megabyte, que é o que a reduzir o pedido existia para evitar.
+LADO_MAXIMO_PERFIL_CLIENTE = LADO_RETRATO_PX
+
+
+def config_perfil() -> dict[str, float]:
+    """Publica para o JavaScript os números com que o retrato é reduzido.
+
+    Mesma política do `upload_config`, com uma diferença que a forma impõe: o
+    `name` do input também é escrito no formulário, porque o redutor de lotes
+    procura `images` e este campo chama-se `photo`. Um `name` escrito no template
+    ao lado do `data-` que o acompanha é um nome que se pode trocar sem o `data-`,
+    e o redutor deixa de armar sem dar erro.
+    """
+    return {
+        "orcamento_perfil_mb": ORCAMENTO_PERFIL_MB,
+        "lado_maximo_perfil_cliente": LADO_MAXIMO_PERFIL_CLIENTE,
     }

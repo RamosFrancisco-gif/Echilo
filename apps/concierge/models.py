@@ -86,7 +86,7 @@ class Lead(models.Model):
     class Meta:
         verbose_name = "contacto"
         verbose_name_plural = "contactos"
-        ordering = ["-created_at"]
+        ordering = ["-created_at", "-id"]
         indexes = [models.Index(fields=["lead_type", "status"], name="lead_type_status_idx")]
 
     def __str__(self) -> str:
@@ -154,7 +154,7 @@ class VisitRequest(models.Model):
     class Meta:
         verbose_name = "pedido de visita"
         verbose_name_plural = "pedidos de visita"
-        ordering = ["-scheduled_for"]
+        ordering = ["-scheduled_for", "-id"]
         indexes = [models.Index(fields=["property", "status"], name="visit_property_status_idx")]
 
     def __str__(self) -> str:
@@ -233,7 +233,7 @@ class Offer(models.Model):
     class Meta:
         verbose_name = "proposta"
         verbose_name_plural = "propostas"
-        ordering = ["-created_at"]
+        ordering = ["-created_at", "-id"]
 
     def __str__(self) -> str:
         return f"{self.property.reference} — {self.amount} {self.currency}"
@@ -310,7 +310,7 @@ class Conversation(models.Model):
     class Meta:
         verbose_name = "conversa"
         verbose_name_plural = "conversas"
-        ordering = ["-updated_at"]
+        ordering = ["-updated_at", "-id"]
 
     def __str__(self) -> str:
         return f"Conversa #{self.pk} ({self.get_handled_by_display()})"
