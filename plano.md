@@ -559,21 +559,30 @@ depende de uma fase que não esteja feita.
 
 ### Fase 0 — Publicar o que está feito ⬅ **agora**
 
-Não é código: é fazer o que já está escrito chegar ao ar.
+Não é código: é fazer o que já está escrito chegar ao ar. Tudo o que está aqui
+precisa de ti — o dashboard da Vercel, o painel do Aiven e a palavra-passe não
+passam por mim.
 
-1. `accounts.0005` + `properties.0009` em produção, de uma máquina com as
-   variáveis todas, **antes** de promover o deploy (`AGENTS.md` §7.1)
+1. `accounts.0006` + `concierge.0004` + `properties.0010` em produção, de uma
+   máquina com as variáveis todas, **antes** de promover o deploy
+   (`AGENTS.md` §7.1). São as da ordenação total dos modelos (Fase 1.2)
 2. `vercel --prod`; confirmar `CLOUDINARY_PUBLICAO` na função
 3. `verify_cloudinary` e um retrato real pela página do perfil
 4. Rotacionar **as credenciais Aiven e Cloudinary que ficaram expostas**
 5. Criar a conta `CURATOR` em `/conta/equipa/novo/` e um `AGENT` (sem `AGENT`
    não há validação de documentos, e sem documentos não há publicação)
-6. Corrigir `AGENTS.md` §3: ou os favoritos entram na Fase 1.4, ou saem da tabela
-7. Desempatar os 8 modelos que `tests.OrdemTotalTests.SEM_DESEMPATE` nomeia — o
-   teste já os aponta, e um nome numa lista de pendências é uma promessa
+6. Definir `ECHILO_DEMO_PASSWORD` se o `seed_demo` vai correr em produção
 
 **Critério de aceitação**: um retrato carregado numa conta de produção aparece no
 cabeçalho, aos 28 px, e não desaparece no pedido seguinte.
+
+Os dois itens que aqui estavam e já não: corrigir a tabela de perfis do
+`AGENTS.md` §3 sobre os favoritos (saiu, porque não há código nenhum) e
+desempatar os 8 modelos (feito na Fase 1.2 — `SEM_DESEMPATE` deixou de existir
+e o teste passou a varrer todos os modelos). O número das migrations mudou duas
+vezes desde que esta lista foi escrita, e é a segunda vez que a lista envelhece
+sem ninguém dar por isso: é escrita à mão e nada a confere contra as
+migrations em disco.
 
 ### Fase 1 — Corrigir o que está errado
 
@@ -598,58 +607,232 @@ Além da tabela, e porque apareceram no caminho:
   passa nenhuma das duas. Escolher o conjunto de regras é decisão de dono — 137
   avisos pré-existentes esperam por essa escolha.
 
-### Fase 2 — A mesa de trabalho da equipa ⬅ **a fase que faz o produto**
+### Fase 2 — Correcções: o código que diz uma coisa e faz outra
 
-`apps/concierge`: inbox de conversas, transições de `Lead`, gestão de visitas,
-gestão de ofertas. É o §6.1 inteiro.
+Oito sítios onde o sistema escreve o que o interface promete e não faz. Nenhum é
+um módulo novo: cinco são código morto, e os outros três divergências que
+esperam por alguém.
 
-**Porque esta fase e não outra**: enquanto ela não existir, o §2.4 é uma promessa
-que o sistema não cumpre, e a equipa trabalha metade do tempo no `/admin` do
-Django — que não é a curadoria que o `AGENTS.md` §3.1 exige (o `/admin` é o
-painel do Django, e o `admin@` local nem sequer é superuser). A curadoria tem de
-estar dentro do produto.
+| O que | Onde | O que fazer |
+| --- | --- | --- |
+| Verificação e rejeição de documentos | `services.py:300 verify_document()` | Ligar na Fase 3. A lógica está certa e não é chamada uma vez |
+| Checklist de triagem | `services.py:212 confirm_submission()` | Ligar na Fase 3, na ficha de curadoria |
+| Sobreposição de visitas | `models.py:163 clean()` | Ligar na Fase 4, quando existir quem confirme uma visita. Até lá é uma regra que nunca corre |
+| Transições de `Lead` | `models.py:95 transition_to()` | Ligar na Fase 4 |
+| Ficha do imóvel fechado | `views.py:820 property_not_published` | Dar-lhe a rota que não tem e as alternativas, na Fase 6 |
+| Selo "Documentação verificada" | `property_detail.html:43` | Feito. Ver abaixo |
+| Tecto de upload | `validators.py:39` (4,5 MB) e `base.py:262` + `:342` (5 MiB) | Feito. Ver abaixo — e eram três sítios, não dois |
+| `assertNumQueries` em três listagens | `team_list`, `client_list`, `lead_queue` | Feito. Ver abaixo |
 
-**Critério de aceitação**: uma conversa escalada pelo assistente aparece na
-inbox da equipa com o motivo interno; um agente responde; o cliente vê a resposta;
-o `Offer` aceito fecha a venda e o `VisitRequest` confirmado aparece na ficha
-pública. Nenhum destes passa pelo `/admin`.
+**Porque primeiro**: uma correção que vem no fim é uma correcção que fica por
+fazer, porque cada módulo novo aumenta o que há para rever. E o selo é a excepção
+que não espera: é público, está numa ficha de um imóvel no ar, e afirma uma coisa
+que ninguém calculou.
 
-### Fase 3 — Documentos dentro do produto
+**Critério de aceitação**: não há nenhum caminho que se alcance a partir de uma
+página, e o selo diz o que foi verificado.
 
-`apps/properties`: envio por `POST` separado, verificação, rejeição com motivo.
-Sem isto a Fase 2 não tem o que mostrar: a equipa confirma visitas e oferta
-documento nenhum.
+#### O que ficou feito, e o que só ficou marcado
+
+O critério acima não está cumprido, e é preciso dizer qual das duas metades está.
+
+**Feito, com teste que falha se o defeito voltar:**
+
+- O selo nomeia a escritura e a identificação — o que o portão exige — em vez de
+  «documentação», e desaparece quando a documentação deixa de estar verificada. A
+  descrição para motores de busca repete a mesma frase e cai com o selo. Duas
+  mutações verificadas.
+- O tecto de upload tem uma fonte. Eram **três**: `LIMITE_PEDIDO_MB` nos
+  validadores, a definição com `env_int` em `base.py:262`, e uma segunda
+  definição escrita à mão em `base.py:342` que a silenciava. O
+  `DATA_UPLOAD_MAX_MEMORY_SIZE` documentado no `AGENTS.md` §7 e posto no
+  `.env.example` nunca chegava a correr. Além disso o valor estava 0,5 MiB acima
+  do limite da plataforma, o que tornava a validação do Django código morto: o
+  pedido morria na edge antes de o Django o ver. Duas mutações verificadas.
+- Três listagens com `assertNumQueries`, medindo o custo *por linha* e não um
+  total. Um total absoluto muda sempre que se toca no `base.html`, e aí o teste
+  falha sem que a listagem tenha piorado. A da fila de contactos é a única que
+  guarda um `select_related` que existe no código; as duas das contas são
+  guardas, não a reprodução de um defeito — não há N+1 nelas hoje.
+
+**Marcado, e é o que fica por fazer:** os cinco trechos de código morto. Nenhum
+deles se corrige sem o caminho que falta, e escrevê-los agora era deixar a lista
+igual com mais um adjectivo. Têm dono: Fase 3 para os dois de documentos, Fase 4
+para a visita e o `Lead`, Fase 6 para a ficha do imóvel fechado.
+
+### Fase 3 — Documentos e triagem dentro do produto
+
+`apps/properties`: envio por `POST` separado, um ficheiro por pedido, com
+validação dos bytes `%PDF-`; verificação e rejeição com motivo; remoção com
+confirmação; checklist de triagem editável na ficha.
+
+**Porque antes da mesa, e é o único inversionamento face ao plano anterior**: a
+lógica já está escrita — `verify_document()`, `missing_verified_documents()`,
+`is_ready_for_review()`, `pending_items()` — e nada a chama. A ficha de curadoria
+existe. Falta o caminho de escrita, que é mais barato que a lógica, e é a etapa
+que tira a documentação legal do `/admin` do Django, onde vive hoje sem ligação
+de nenhum template.
+
+A validação existente é por extensão (`storage.py:103`). O `%PDF-` que o plano
+pede não existe em código de produção — só aparece em dados de teste.
 
 **Critério de aceitação**: um imóvel chega a `PUBLISHED` sem sair do produto
 nenhuma vez.
 
-### Fase 4 — Notificações
+### Fase 4 — As acções da equipa, e o que acorda sozinho
 
-`apps/notifications`. Não antes da Fase 2: notificar a equipa de coisas que ela
-não consegue tratar é pior do que não notificar.
+`apps/concierge`: confirmar e recusar visita com motivo, `NO_SHOW`, o passo "quer
+fazer proposta?" depois de concluída, e as listas de visitas e de propostas, que
+**não existem hoje** — há quatro rotas e três delas são pedidos do cliente.
+`Offer` ganha `parent` e a máquina de estados
+(`SUBMITTED → UNDER_REVIEW → COUNTERED → ACCEPTED | REJECTED | WITHDRAWN`); hoje
+não tem `ALLOWED_TRANSITIONS` nem `transition_to()`, ao contrário do `Lead`. As
+transições de `Lead` ganham o caminho que lhes falta dentro do produto.
+
+**E uma decisão de infra-estrutura que ninguém tomou**: `vercel.json` não tem
+`crons`, e não há Celery, APScheduler nem fila. O "lembrete 24 h antes" e a fila
+de reconfirmação dependem de algo que acorde sozinho. As opções são o Vercel
+Cron a chamar um endpoint, ou um agendador externo a chamar o mesmo endpoint.
+Decidir aqui evita que a Fase 6 e a Fase 7 inventem respostas diferentes.
+
+**Porque antes da mesa**: a mesa são botões, e um botão que aponta para uma acção
+que não existe é uma inbox que não trata de nada.
+
+**Critério de aceitação**: cada fila tem a acção que lhe falta, e nada se resolve
+pelo `/admin`.
+
+### Fase 5 — A mesa de trabalho da equipa
+
+`apps/concierge`: inbox única de conversas escaladas, leads, visitas e propostas,
+cada uma com dono, estado e prazo de resposta; `PropertyNote`; resposta a
+conversas sem as mensagens internas visíveis ao cliente.
+
+**É a fase que faz o produto, e é a mais cara**: não é uma página, são quatro
+conjuntos de acções, e a Fase 4 é o que as dá. Aqui é navegação, resposta e
+prazo.
+
+Existe hoje uma fila de `Lead` (`views.py:126`) que é só de leitura e **não está
+no menu** — é alcançável por URL. As conversas escaladas só se veem pelo
+`/admin`.
+
+**Critério de aceitação**: uma conversa escalada aparece na inbox com o motivo
+interno, um agente responde, o cliente vê a resposta, e nenhum destes passa pelo
+`/admin`.
+
+### Fase 6 — O que acontece depois de haver negócio
+
+`Property.Status` ganha `RESERVED`, `RENTED`, `SOLD` e `PAUSED`. Uma proposta
+`ACCEPTED` reserva o imóvel; o fecho passa-o a `RENTED` ou `SOLD`; a falta de
+reconfirmação do dono passa-o a `PAUSED`. Só `PUBLISHED` aparece na pesquisa; os
+outros aparecem na ficha, com o aviso e as alternativas.
+
+As condições comerciais passam a campos estruturados — caução, meses adiantados,
+pagamento anual, água, energia, gerador, condomínio. Hoje há um booleano
+(`accepts_annual_payment`) e um `TextField`, e a caução não existe no repositório
+nem como palavra. É esta etapa que dá à IA dados para responder em vez de dizer
+que não sabe, e o `AGENTS.md` §2.4 já promete que ela não inventa.
+
+O selo "Verificado pelo Echilo" passa a enumerar o que foi verificado.
+`property_not_published` ganha a rota que não tem.
+
+**Critério de aceitação**: uma proposta aceite reserva o imóvel, e um imóvel
+fechado deixa de aparecer na pesquisa.
+
+### Fase 7 — Notificações
+
+Uma regra só: `notify(destinatário, tipo, contexto)`, envio em
+`transaction.on_commit`, e-mail primeiro. Nenhum módulo envia mensagens por fora
+dela. Falha de envio nunca desfaz a operação de negócio.
+
+Hoje há um envio em todo o projecto — a recuperação da senha — e zero `on_commit`.
+
+O WhatsApp fica para depois e é um projecto próprio: conta Business, templates
+aprovados e janela de 24 h. `ECHILO_WHATSAPP_NUMBER` está nas settings e não é
+usado por um único template.
 
 **Critério de aceitação**: cliente e equipa sabem, sem pedir, o que aconteceu a um
 pedido — e um SMTP em baixo não devolve 500.
 
-### Fase 5 — Favoritos, e o contrato do cliente
+### Fase 8 — Dinheiro: mandato, contrato, comissão
 
-`Favorite` primeiro (é pequeno e é o que o `AGENTS.md` já promete), e depois a
-assinatura digital do contrato, que é o que dá valor à oferta aceite.
+`Mandate` (comissão, prazo, exclusividade, e a cláusula de comissão devida se o
+negócio fechar com um cliente apresentado pelo Echilo), `Contract`
+(`DRAFT → SENT → SIGNED → ACTIVE → CLOSED | CANCELLED`), e a comissão
+**derivada**, nunca digitada, com o arredondamento fixado por teste. O PDF
+assinado sai por link assinado, como a documentação legal. `apps/billing` é app
+novo.
 
-### Fase 6 — Financeiro
+O mandato é o que trava a fuga de comissão, que é o risco de gravidade alta que
+depende de mais ninguém.
 
-`apps/billing`: contrato, parcelas, comissão, relatórios. Com o módulo de
-assinatura da Fase 5 a dar o formato.
+**Depende das decisões do §9** — base de cálculo no arrendamento, quem paga os
+8 %, renovações, moedas. Sem elas a comissão não tem regra e a etapa não fecha.
 
-### Fase 7 — Operação
+**Critério de aceitação**: a comissão de cada contrato é calculada, não digitada.
 
-Logs estruturados, `request_id`, `/saude/`, `check --deploy`, backup ensaiado,
-rotação de credenciais como comando.
+### Fase 9 — Favoritos, portal do dono, registo progressivo
 
-### Fase 8 — Decisões de dono
+`Favorite(user, property)` com unicidade por par e a mesma lista paginada do
+catálogo. O perfil `OWNER` e a ligação que **não existe hoje** entre
+`OwnerProfile` e `User` — sem ela o dono não tem conta, e o portal seria um link
+sem dono. O portal é só de leitura: estado do imóvel, visitas, propostas,
+comissão prevista.
 
-API pública, WhatsApp Business, multi-idioma. Cada uma tem resposta de sim ou
-não; nenhuma delas é urgente.
+O registo progressivo — navegar sem conta, pedir visita com telefone verificado,
+NIF e BI só na proposta formal — **mexe no `AGENTS.md` §2.11**, que hoje ancora a
+conta a uma pessoa real e manda a equipa-contactar o cliente antes de tratar de
+qualquer pedido. Aquele anchor é o que impede o produto de virar um formulário de
+anúncios; trocá-lo é preço a pagar, e o preço escreve-se no `AGENTS.md`, não
+numa nota de rodapé.
+
+`Favorite` é pequeno e independente das outras duas, e pode ser puxado para
+antes se houver vontade.
+
+**Critério de aceitação**: o dono vê os seus imóveis sem perguntar pelo WhatsApp.
+
+### Fase 10 — Operação e qualidade
+
+Logs estruturados com `request_id` — hoje o `LOGGING` é um `StreamHandler` e o
+`server_error` não regista nada. `/saude/` que diga qual dos três serviços
+falhou: o único health check que há é o do assistente, e não testa nada, devolve
+settings. O comando `check --deploy`, que existe hoje só como 45 testes em
+`test_deploy.py`. Rotação de credenciais como comando. Um backup restaurado com
+sucesso ao menos uma vez.
+
+Os KPIs de operação — tempo de resposta, visita→proposta, proposta→fecho, dias
+até publicar, receita por mês — só são possíveis depois da Fase 8: hoje
+`Offer.responded_at` existe e nunca é escrito, e não há campo de tempo de
+resposta em visita.
+
+**Esta é a única fase que não bloqueia ninguém e não é bloqueada por ninguém**,
+fora os KPIs. Pode correr em paralelo a partir de qualquer ponto.
+
+**Critério de aceitação**: `/saude/` diz qual dos três serviços falhou, e um 500
+tem `request_id` e chega a alguém.
+
+### O que mudou de posição, e porquê
+
+A leitura do código pôs os documentos (M8) antes da mesa (M11), e não é
+cosmético.
+
+- **O M8 é barato porque já está escrito.** `verify_document()` faz a verificação,
+  a rejeição com motivo, `verified_by` e `verified_at`, e não é chamada uma vez.
+  Falta o caminho de escrita, que é mais barato que a lógica.
+- **O M11 é caro porque são acções, não páginas.** Inbox de conversas, gestão de
+  visitas, de propostas e de leads são quatro fluxos, e cada um precisa do seu
+  serviço antes de ter o seu botão. Construir a mesa primeiro é construir quatro
+  listas de botões que não fazem nada.
+
+O plano anterior punha a mesa primeiro, com a justificação de que a equipa
+precisa de um sítio onde trabalhar. É verdade, e a Fase 4 dá-lhe o sítio: cada
+fila passa a ter a acção que lhe falta. A Fase 5 é então navegação e prazo, que é
+a parte barata.
+
+Nenhum dos treze módulos está completo. E os rótulos `[existe]`, `[parcial]` e
+`[falta]` do plano em HTML vêm do plano anterior, por admissão do próprio
+documento, e não de uma leitura do código. Este §7 é a versão que passou pela
+leitura; o HTML é a versão anterior e não serve de referência para o estado de
+nada.
 
 ### Fora do âmbito, para sempre
 
