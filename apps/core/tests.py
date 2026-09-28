@@ -1478,6 +1478,34 @@ class LimiteDoPedidoTests(SimpleTestCase):
         self.assertLess(LIMITE_UPLOAD_MB, LIMITE_PEDIDO_MB)
         self.assertGreater(LIMITE_UPLOAD_MB, 0)
 
+    def test_as_settings_herdam_o_tecto_da_plataforma(self) -> None:
+        """O tecto do Django é o da plataforma, e não um número ao lado dele.
+
+        Havia duas definições em `config/settings/base.py`: a primeira com
+        `env_int`, a segunda com o número escrito à mão. A segunda vencia a
+        primeira, e o `DATA_UPLOAD_MAX_MEMORY_SIZE` documentado no `AGENTS.md` §7 e
+        no `.env.example` nunca chegava a correr. O efeito não era o valor — 5 MiB
+        contra 4,5 MB é a diferença entre a validação do Django responder e um
+        «Content Too Large» terso da edge.
+        """
+        self.assertEqual(
+            settings.DATA_UPLOAD_MAX_MEMORY_SIZE,
+            int(LIMITE_PEDIDO_MB * 1024 * 1024),
+        )
+
+    def test_o_tecto_do_django_nao_acima_do_tecto_da_plataforma(self) -> None:
+        """Acima do limite da plataforma, a validação do Django é código morto.
+
+        O pedido morre antes de o Django o ver, e nunca chega a `add_error`. A
+        ordem importa: abaixo ou igual deixa o Django responder com a página que
+        a equipa de curadoria entende; acima deixa a edge responder com três
+        palavras.
+        """
+        self.assertLessEqual(
+            settings.DATA_UPLOAD_MAX_MEMORY_SIZE,
+            LIMITE_PEDIDO_MB * 1024 * 1024,
+        )
+
     def test_o_tecto_de_upload_sao_megabytes_inteiros(self) -> None:
         """A validação compara com um tamanho de ficheiro, e um `float` não arredonda.
 

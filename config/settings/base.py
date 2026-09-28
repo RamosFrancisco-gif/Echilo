@@ -8,6 +8,17 @@ from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
+# O tecto de upload é um facto da plataforma, e o `LIMITE_PEDIDO_MB` é a única
+# explicação de porque é 4,5 MB e não 5. As settings vão buscá-lo ao app em vez de
+# o repetir, porque um número repetido diverge sem dar erro — e o que divergia
+# aqui não era o valor, era o facto de a segunda definição silenciar a primeira e
+# o `env_int` nunca chegar a correr.
+#
+# Importar um módulo de app durante o carregamento das settings é seguro porque o
+# `apps.core.validators` não toca no registo de apps: só `re`, `datetime`,
+# `Decimal` e dois utilitários do Django que não dependem dele.
+from apps.core.validators import LIMITE_PEDIDO_MB
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 load_dotenv(BASE_DIR / ".env")
@@ -259,8 +270,22 @@ STORAGES = storages(manifest=not DEBUG, cloudinary=CLOUDINARY_PUBLICAO)
 # O §6 limita o que entra. A Cloudinary volta a validar os formatos, mas validar
 # duas vezes não é redundância: uma das validações está a oito saltos do
 # ficheiro e a outra no próprio campo.
-DATA_UPLOAD_MAX_MEMORY_SIZE = env_int("DATA_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024)
-FILE_UPLOAD_MAX_MEMORY_SIZE = env_int("FILE_UPLOAD_MAX_MEMORY_SIZE", 5 * 1024 * 1024)
+#
+# O tecto sai de `LIMITE_PEDIDO_MB`, e não de um número escrito aqui, porque o
+# limite é um só e há uma explicação de porquê em `apps.core.validators`. Com
+# 5 MiB nas settings e 4,5 MB na plataforma, o pedido entre os dois morria na
+# edge da Vercel — terso, sem página e sem a mensagem que a equipa de curadoria
+# entendia — e a validação do Django nunca chegava a correr.
+DATA_UPLOAD_MAX_MEMORY_SIZE = env_int(
+    "DATA_UPLOAD_MAX_MEMORY_SIZE", int(LIMITE_PEDIDO_MB * 1024 * 1024)
+)
+
+# Este não é um tecto de recusa: é a partir de que tamanho o Django escreve o
+# ficheiro num temporário em vez de o ter em memória. Fica no tamanho do pedido
+# porque um ficheiro não pode ser maior do que o pedido que o traz.
+FILE_UPLOAD_MAX_MEMORY_SIZE = env_int(
+    "FILE_UPLOAD_MAX_MEMORY_SIZE", int(LIMITE_PEDIDO_MB * 1024 * 1024)
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -338,9 +363,6 @@ ECHILO_MAP_DEFAULT_ZOOM = env_int("ECHILO_MAP_DEFAULT_ZOOM", 12)
 # CARTO passou a devolver HTTP 200 com um cartaz de "API KEY REQUIRED". Nenhum
 # dos dois é fiável para um mapa que é parte do produto.
 ECHILO_MAP_INVERT_TILES = env_bool("ECHILO_MAP_INVERT_TILES", False)
-
-DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
-FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
 LOGGING = {
     "version": 1,

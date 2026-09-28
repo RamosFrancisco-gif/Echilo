@@ -1112,8 +1112,8 @@ Directrizes visuais herdadas dos protótipos existentes:
 | `DJANGO_SECURE_SSL_REDIRECT` | `true` em produção. |
 | `CLOUDINARY_URL` | `cloudinary://<api_key>:<api_secret>@<cloud_name>`. Obrigatória em produção. |
 | `CLOUDINARY_PUBLICAO` | `true` em produção. `false` deixa o `MEDIA_ROOT` de uma função, que é efémero. |
-| `DATA_UPLOAD_MAX_MEMORY_SIZE` | Bytes. Predefinido: 5 MiB. |
-| `FILE_UPLOAD_MAX_MEMORY_SIZE` | Bytes. Predefinido: 5 MiB. |
+| `DATA_UPLOAD_MAX_MEMORY_SIZE` | Bytes. Predefinido: `LIMITE_PEDIDO_MB` de `apps.core.validators` (4,5 MB), o mesmo limite que a plataforma aplica. |
+| `FILE_UPLOAD_MAX_MEMORY_SIZE` | Bytes a partir dos quais o Django escreve o ficheiro num temporário. Predefinido: o mesmo. Não é um tecto de recusa. |
 | `ECHILO_AI_TIMEOUT` | Segundos por tentativa ao Groq. Predefinido: `6.0`. |
 | `ECHILO_AI_MAX_RETRIES` | Tentativas. Predefinido: `0`. |
 
