@@ -16,7 +16,9 @@ from django.core import mail
 from django.core.cache import cache
 from django.core.files.storage import FileSystemStorage, default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
@@ -1160,6 +1162,55 @@ class AccountAdminTests(RateLimitFreeTestCase):
         self.assertContains(response, "curador@echilo.ao")
         self.assertContains(response, "agente@echilo.ao")
         self.assertNotContains(response, "cliente@echilo.ao")
+
+    def test_a_lista_da_equipa_nao_custa_uma_consulta_por_membro(self) -> None:
+        """Seis membros custam as mesmas consultas que três.
+
+        Compara-se o custo por linha e não o total: o total inclui a sessão, o
+        utilizador e a contagem da paginação, e qualquer uma delas muda sem que a
+        listagem piore. O que não pode mudar é acrescentar linhas e ver o número
+        de consultas subir na mesma proporção.
+        """
+        self.client.force_login(self.admin)
+        url = reverse("accounts:team_list")
+
+        with CaptureQueriesContext(connection) as com_tres:
+            primeira = self.client.get(url)
+
+        for indice in range(3):
+            make_user(role=User.Role.CURATOR, email=f"curador{indice}@echilo.ao")
+
+        with CaptureQueriesContext(connection) as com_seis:
+            segunda = self.client.get(url)
+
+        self.assertEqual(len(primeira.context["membros"]), 3)
+        self.assertEqual(len(segunda.context["membros"]), 6)
+        self.assertEqual(len(com_seis), len(com_tres))
+
+    def test_a_lista_de_clientes_nao_custa_uma_consulta_por_cliente(self) -> None:
+        """A lista de clientes mede-se como a da equipa, e pelos mesmos motivos.
+
+        Esta lista tem uma consulta a mais por acção: o `total` do cabeçalho é
+        contado à parte do queryset paginado. Duas fontes para a mesma pergunta é
+        o que o `AGENTS.md` §5.3 recusa, e são as duas a dar a mesma resposta —
+        enquanto continuarem a dar.
+        """
+        self.client.force_login(self.admin)
+        url = reverse("accounts:client_list")
+
+        with CaptureQueriesContext(connection) as com_um:
+            primeira = self.client.get(url)
+
+        for indice in range(5):
+            make_user(email=f"cliente{indice:02d}@echilo.ao")
+
+        with CaptureQueriesContext(connection) as com_seis:
+            segunda = self.client.get(url)
+
+        self.assertEqual(len(primeira.context["clientes"]), 1)
+        self.assertEqual(len(segunda.context["clientes"]), 6)
+        self.assertEqual(segunda.context["total"], 6)
+        self.assertEqual(len(com_seis), len(com_um))
 
     def test_a_lista_de_clientes_mostra_seis_de_seis(self) -> None:
         """A lista de clientes pagina de seis em seis, como todas as outras."""

@@ -7,7 +7,9 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -275,6 +277,44 @@ class LeadQueueTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.context["leads"]), 2)
+
+    def test_a_fila_nao_custa_uma_consulta_por_contacto(self) -> None:
+        """Cinco contactos na página custam as mesmas consultas que dois.
+
+        A comparação é entre duas capturas com número de linhas diferente, e não
+        com um número solto. Um total absoluto muda sempre que se toca numa linha
+        do `base.html` — o mesmo ficheiro que desenha o cabeçalho, o rodapé e o
+        `avatar` de cada membro da equipa —, e aí o teste falha sem que a
+        listagem tenha piorado. O que tem de ser constante é o custo *por linha*.
+
+        É o `select_related` da view que segura isto: o `assigned_to` entra na
+        consulta, e a linha do template lê `lead.assigned_to.full_name`. Todos os
+        contactos têm de estar atribuídos: uma fila onde ninguém foi responsável
+        por nada não chega ao campo que faria a consulta, e o teste passava
+        com o `select_related` removido.
+        """
+        Lead.objects.update(assigned_to=self.agent)
+        self.client.force_login(self.agent)
+
+        with CaptureQueriesContext(connection) as com_dois:
+            self.client.get(self.url)
+
+        for indice in range(3):
+            Lead.objects.create(
+                full_name=f"Contacto {indice:02d}",
+                phone="+244 912 345 678",
+                lead_type=Lead.Type.CLIENT_ENQUIRY,
+                status=Lead.Status.NEW,
+                assigned_to=self.agent,
+            )
+
+        with CaptureQueriesContext(connection) as com_cinco:
+            response = self.client.get(self.url)
+
+        # Cinco cabem numa página (`PAGINA_PADRAO` são seis): a comparação mede
+        # linhas desenhadas, e linhas de uma segunda página não medem nada.
+        self.assertEqual(len(response.context["leads"]), 5)
+        self.assertEqual(len(com_cinco), len(com_dois))
 
 
 class LeadQueuePaginationTests(TestCase):
