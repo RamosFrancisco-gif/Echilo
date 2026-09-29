@@ -115,6 +115,18 @@ class RouteSmokeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "T3 no Kilamba com quintal")
 
+    def test_o_hero_nao_oferece_conta_a_quem_tem_sessao(self) -> None:
+        """Com sessão, o hero manda pesquisar; sem sessão, manda criar conta."""
+        html_visitante = self.anonymous.get(reverse("properties:home")).content.decode()
+
+        self.assertIn("Criar conta gratuita", html_visitante)
+
+        self.client.force_login(self.client_user)
+        html_dentro = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertNotIn("Criar conta gratuita", html_dentro)
+        self.assertIn("Pesquisar imóveis", html_dentro)
+
     def _fotos_do_carrocel(self, html: str) -> list[str]:
         """As tags das imagens que rodam, e nada mais.
 

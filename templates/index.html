@@ -45,7 +45,11 @@
       </div>
 
       <div class="hero__actions">
-        <a class="btn btn--primary" href="{% url 'accounts:register' %}">Criar conta gratuita</a>
+        {% if current_user.is_authenticated %}
+          <a class="btn btn--primary" href="{% url 'properties:property_list' %}">Pesquisar imóveis</a>
+        {% else %}
+          <a class="btn btn--primary" href="{% url 'accounts:register' %}">Criar conta gratuita</a>
+        {% endif %}
         <a class="btn" href="{% url 'concierge:owner_intake' %}">Quero anunciar o meu imóvel</a>
       </div>
     </div>

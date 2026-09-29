@@ -10,7 +10,7 @@ from django.contrib.auth import views as auth_views
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q, QuerySet
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import FormView, ListView
@@ -107,7 +107,14 @@ class RegistrationView(FormView):
         return context
 
     def dispatch(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponse:
-        """Protege o cadastro contra abuso de envio automático."""
+        """Quem tem sessão não volta ao registo, e o envio é limitado.
+
+        O login já redireciona autenticados para dentro; o registo deixava
+        entrar e criava uma segunda conta na mesma sessão. O limite protege o
+        cadastro contra abuso de envio automático.
+        """
+        if request.user.is_authenticated:
+            return redirect("properties:home")
         limit = check_rate_limit(request, scope=REGISTER_RATE_SCOPE, limit=5, window=600)
         if not limit.allowed:
             messages.error(

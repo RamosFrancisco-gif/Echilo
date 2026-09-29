@@ -100,6 +100,17 @@ class RegistrationTests(RateLimitFreeTestCase):
         self.assertTrue(user.check_password(PASSWORD))
         self.assertEqual(int(self.client.session["_auth_user_id"]), user.pk)
 
+    def test_quem_tem_sessao_nao_volta_ao_registo(self) -> None:
+        """Com sessão, o registo redireciona para a home sem criar segunda conta."""
+        self.client.post(self.url, registration_payload(email="Ana@Exemplo.AO"))
+
+        resposta_get = self.client.get(self.url)
+        resposta_post = self.client.post(self.url, registration_payload(email="Bia@Exemplo.AO"))
+
+        self.assertRedirects(resposta_get, reverse("properties:home"))
+        self.assertRedirects(resposta_post, reverse("properties:home"))
+        self.assertEqual(User.objects.count(), 1)
+
     def test_o_registo_oferece_as_vinte_e_uma_provincias(self) -> None:
         """Quem se regista escolhe de entre as 21, e não de entre as que têm imóveis.
 
