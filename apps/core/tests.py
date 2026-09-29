@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from importlib import import_module
 from math import asin, cos, degrees, radians, sin
@@ -11,21 +11,25 @@ from pathlib import Path
 
 from django import forms
 from django.apps import apps
-from apps.core.pagination import PAGINA_PADRAO, pagina_de
-from apps.core.templatetags.echilo_format import distance, kwanza, kwanza_compact
 from django.conf import settings
 from django.contrib.staticfiles import finders
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.http import HttpRequest
-from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.template import Context, Template
 from django.template.loader import render_to_string
-from django.views.generic import ListView
+from django.test import (
+    Client,
+    RequestFactory,
+    SimpleTestCase,
+    TestCase,
+    override_settings,
+)
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
+from django.views.generic import ListView
 
 from apps.accounts.models import User
 from apps.concierge.models import Conversation, Lead, Offer, VisitRequest
@@ -35,6 +39,18 @@ from apps.core.geo import (
     EARTH_RADIUS_M,
     circle_bounding_box,
     haversine_metres,
+)
+from apps.core.management.commands.verify_map_tiles import _tile_xy
+from apps.core.pagination import PAGINA_PADRAO, pagina_de
+from apps.core.templatetags.echilo_format import distance, kwanza, kwanza_compact
+from apps.core.tempo import quando_para_o_cliente
+from apps.core.testing import (
+    make_image,
+    make_owner,
+    make_property,
+    make_user,
+    make_verified_documents,
+    select_options,
 )
 from apps.core.validators import (
     LIMITE_PEDIDO_MB,
@@ -51,16 +67,6 @@ from apps.core.validators import (
     validate_nif,
     validate_search_radius_m,
 )
-from apps.core.management.commands.verify_map_tiles import _tile_xy
-from apps.core.testing import (
-    make_image,
-    make_owner,
-    make_property,
-    make_user,
-    make_verified_documents,
-    select_options,
-)
-
 from apps.properties.models import Property
 from apps.properties.reference import ANGOLA_PROVINCES
 
@@ -1763,3 +1769,57 @@ class ListagensUsamOPaginaPadraoTests(SimpleTestCase):
         """
         self.assertGreaterEqual(len(self._listagens()), 5)
 
+
+
+def _luanda(*args: int) -> datetime:
+    """Constrói um consciente em Africa/Luanda sem `make_aware`."""
+    return datetime(*args, tzinfo=timezone.get_default_timezone())
+
+
+class TempoTests(SimpleTestCase):
+    """O cliente lê "amanhã às 10:00", não uma data (§1, Africa/Luanda)."""
+
+    def test_hoje_e_amanha(self) -> None:
+        """Às 23h, a visita das 10h de amanhã é amanhã, não "daqui a 11 horas"."""
+        agora = _luanda(2026, 9, 29, 23, 0)
+
+        self.assertEqual(
+            quando_para_o_cliente(
+                _luanda(2026, 9, 30, 10, 0), agora=agora
+            ),
+            "amanhã às 10:00",
+        )
+        self.assertEqual(
+            quando_para_o_cliente(
+                _luanda(2026, 9, 29, 23, 40), agora=agora
+            ),
+            "hoje às 23:40",
+        )
+
+    def test_semana_diz_o_dia(self) -> None:
+        """Dentro de sete dias, o dia da semana chega; a data não é precisa."""
+        agora = _luanda(2026, 9, 29, 10, 0)
+
+        self.assertEqual(
+            quando_para_o_cliente(
+                _luanda(2026, 10, 2, 15, 0), agora=agora
+            ),
+            "sexta-feira, 02/10 às 15:00",
+        )
+
+    def test_longe_diz_a_data_e_passado_nunca_diz_ontem(self) -> None:
+        """Longe é data completa; o passado nunca é "ontem"."""
+        agora = _luanda(2026, 9, 29, 10, 0)
+
+        self.assertEqual(
+            quando_para_o_cliente(
+                _luanda(2026, 10, 29, 15, 0), agora=agora
+            ),
+            "29/10/2026 às 15:00",
+        )
+        self.assertEqual(
+            quando_para_o_cliente(
+                _luanda(2026, 9, 28, 15, 0), agora=agora
+            ),
+            "28/09/2026 às 15:00",
+        )

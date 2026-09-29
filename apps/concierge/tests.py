@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -18,6 +19,16 @@ from apps.core.testing import make_owner, make_property, make_user
 from apps.properties.models import Property
 
 from .models import Lead, Offer, VisitRequest
+from .services import (
+    advance_lead,
+    answer_offer,
+    counter_offer,
+    decide_visit,
+    due_for_scheduling,
+    get_or_create_conversation,
+    request_visit,
+    submit_offer,
+)
 
 User = get_user_model()
 
@@ -372,3 +383,442 @@ class LeadQueuePaginationTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(response.context["leads"].paginator.count, PAGINA_PADRAO + 1)
+
+
+class DecideVisitTests(TestCase):
+    """A equipa decide; o cliente lê o que lhe diz respeito (§2.10)."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.agent = make_user(role=User.Role.AGENT, email="agente@exemplo.ao")
+        self.curator = make_user(role=User.Role.CURATOR, email="curador@exemplo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.rent = make_property(
+            curator=self.curator, owner=self.owner, title="T3 para arrendar"
+        )
+        self.sale = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            purpose=Property.Purpose.SALE,
+            price="85000000.00",
+            title="Moradia para venda",
+        )
+        self.client_user = make_user(email="cliente@exemplo.ao")
+
+    def _visit(self, prop: object | None = None, days: int = 3) -> VisitRequest:
+        """Cria o pedido pela via do cliente, como o produto faz."""
+        return request_visit(
+            prop=prop or self.rent,
+            user=self.client_user,
+            scheduled_for=timezone.now() + timedelta(days=days),
+        )
+
+    def _visible(self, prop: object):
+        """As mensagens que o cliente pode ler sobre aquele imóvel."""
+        conversation = get_or_create_conversation(
+            user=self.client_user, property_interest=prop
+        )
+        return conversation.messages.filter(is_internal=False)
+
+    def test_decline_without_reason_is_refused(self) -> None:
+        """Recusar sem motivo não muda nada: o motivo é o que o cliente lê."""
+        visit = self._visit()
+
+        with self.assertRaises(ValidationError):
+            decide_visit(
+                visit=visit, target=VisitRequest.Status.DECLINED, actor=self.agent
+            )
+
+        visit.refresh_from_db()
+        self.assertEqual(visit.status, VisitRequest.Status.PENDING)
+
+    def test_decline_records_reason_and_notifies(self) -> None:
+        """A recusa grava motivo, autor e data, e o cliente lê o motivo."""
+        visit = self._visit()
+
+        decide_visit(
+            visit=visit,
+            target=VisitRequest.Status.DECLINED,
+            actor=self.agent,
+            reason="O dono viaja nessa semana.",
+        )
+
+        visit.refresh_from_db()
+        self.assertEqual(visit.status, VisitRequest.Status.DECLINED)
+        self.assertEqual(visit.decline_reason, "O dono viaja nessa semana.")
+        self.assertEqual(visit.handled_by, self.agent)
+        self.assertIsNotNone(visit.handled_at)
+        self.assertIn("O dono viaja nessa semana.", self._visible(self.rent).last().body)
+
+    def test_confirm_does_not_fill_decline_reason(self) -> None:
+        """A nota interna da confirmação não cai no campo da recusa."""
+        visit = self._visit()
+
+        decide_visit(
+            visit=visit,
+            target=VisitRequest.Status.CONFIRMED,
+            actor=self.agent,
+            reason="Cliente prefere de manhã.",
+        )
+
+        visit.refresh_from_db()
+        self.assertEqual(visit.decline_reason, "")
+        bodies = [message.body for message in self._visible(self.rent)]
+        self.assertTrue(any("confirmada" in body for body in bodies))
+        self.assertFalse(any("manhã" in body for body in bodies))
+
+    def test_reopen_clears_stale_reason(self) -> None:
+        """Reabrir limpa o motivo: pertence à recusa, não à visita."""
+        visit = self._visit()
+        decide_visit(
+            visit=visit,
+            target=VisitRequest.Status.DECLINED,
+            actor=self.agent,
+            reason="Chuva.",
+        )
+
+        decide_visit(visit=visit, target=VisitRequest.Status.PENDING, actor=self.agent)
+
+        visit.refresh_from_db()
+        self.assertEqual(visit.status, VisitRequest.Status.PENDING)
+        self.assertEqual(visit.decline_reason, "")
+
+    def test_no_show_writes_nothing_to_client(self) -> None:
+        """O `NO_SHOW` é registo interno: o cliente sabe que não apareceu."""
+        visit = self._visit()
+        decide_visit(
+            visit=visit, target=VisitRequest.Status.CONFIRMED, actor=self.agent
+        )
+        before = self._visible(self.rent).count()
+
+        decide_visit(visit=visit, target=VisitRequest.Status.NO_SHOW, actor=self.agent)
+
+        visit.refresh_from_db()
+        self.assertEqual(visit.status, VisitRequest.Status.NO_SHOW)
+        self.assertEqual(self._visible(self.rent).count(), before)
+
+    def test_completed_on_sale_asks_for_offer(self) -> None:
+        """Visita concluída em imóvel à venda pergunta pela proposta."""
+        visit = self._visit(prop=self.sale)
+        decide_visit(
+            visit=visit, target=VisitRequest.Status.CONFIRMED, actor=self.agent
+        )
+
+        decide_visit(
+            visit=visit, target=VisitRequest.Status.COMPLETED, actor=self.agent
+        )
+
+        self.assertIn("proposta", self._visible(self.sale).last().body)
+
+    def test_completed_on_rent_has_no_offer_question(self) -> None:
+        """Em arrendamento não há o que propor: a pergunta não aparece."""
+        visit = self._visit()
+        decide_visit(
+            visit=visit, target=VisitRequest.Status.CONFIRMED, actor=self.agent
+        )
+
+        decide_visit(
+            visit=visit, target=VisitRequest.Status.COMPLETED, actor=self.agent
+        )
+
+        self.assertNotIn("proposta", self._visible(self.rent).last().body)
+
+    def test_invalid_transition_raises(self) -> None:
+        """Um `PENDING` não é concluído sem passar pela confirmação."""
+        visit = self._visit()
+
+        with self.assertRaises(ValidationError):
+            decide_visit(
+                visit=visit, target=VisitRequest.Status.COMPLETED, actor=self.agent
+            )
+
+
+class AnswerOfferTests(TestCase):
+    """A resposta da equipa chega ao cliente certo (§2.5)."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.agent = make_user(role=User.Role.AGENT, email="agente@exemplo.ao")
+        self.curator = make_user(role=User.Role.CURATOR, email="curador@exemplo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.sale = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            purpose=Property.Purpose.SALE,
+            price="85000000.00",
+            title="Moradia para venda",
+        )
+        self.client_user = make_user(email="cliente@exemplo.ao")
+
+    def _offer(self, amount: str = "82000000.00") -> Offer:
+        return submit_offer(
+            prop=self.sale, user=self.client_user, amount=Decimal(amount)
+        )
+
+    def _visible(self):
+        conversation = get_or_create_conversation(
+            user=self.client_user, property_interest=self.sale
+        )
+        return conversation.messages.filter(is_internal=False)
+
+    def test_accept_notifies_client(self) -> None:
+        """O aceite regista autor e data, e o cliente lê que foi aceite."""
+        offer = self._offer()
+
+        answer_offer(offer=offer, target=Offer.Status.ACCEPTED, actor=self.agent)
+
+        offer.refresh_from_db()
+        self.assertEqual(offer.responded_by, self.agent)
+        self.assertIsNotNone(offer.responded_at)
+        self.assertIn("aceite", self._visible().last().body)
+
+    def test_countered_target_is_refused(self) -> None:
+        """`COUNTERED` por transição é recusado: não regista o preço da equipa."""
+        offer = self._offer()
+
+        with self.assertRaises(ValidationError):
+            answer_offer(
+                offer=offer, target=Offer.Status.COUNTERED, actor=self.agent
+            )
+
+        offer.refresh_from_db()
+        self.assertEqual(offer.status, Offer.Status.SUBMITTED)
+
+    def test_accept_on_counter_reaches_original_client(self) -> None:
+        """O aviso do aceite da contraproposta vai ao cliente, não ao agente."""
+        offer = self._offer()
+        contra = counter_offer(
+            offer=offer,
+            amount=Decimal("80000000.00"),
+            actor=self.agent,
+            message="Último preço.",
+        )
+
+        answer_offer(offer=contra, target=Offer.Status.ACCEPTED, actor=self.agent)
+
+        bodies = [message.body for message in self._visible()]
+        self.assertTrue(any("aceite" in body for body in bodies))
+
+    def test_withdraw_notifies_client(self) -> None:
+        """A desistência registada pela equipa aparece ao cliente como retirada."""
+        offer = self._offer()
+
+        answer_offer(
+            offer=offer,
+            target=Offer.Status.WITHDRAWN,
+            actor=self.agent,
+            notes="Cliente desistiu ao telefone.",
+        )
+
+        self.assertIn("retirada", self._visible().last().body)
+
+    def test_answer_on_closed_offer_raises(self) -> None:
+        """Proposta fechada não responde duas vezes."""
+        offer = self._offer()
+        answer_offer(offer=offer, target=Offer.Status.ACCEPTED, actor=self.agent)
+
+        with self.assertRaises(ValidationError):
+            answer_offer(offer=offer, target=Offer.Status.REJECTED, actor=self.agent)
+
+
+class CounterOfferTests(TestCase):
+    """A contraproposta é uma proposta nova com pai, não um estado."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.agent = make_user(role=User.Role.AGENT, email="agente@exemplo.ao")
+        self.curator = make_user(role=User.Role.CURATOR, email="curador@exemplo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.sale = make_property(
+            curator=self.curator,
+            owner=self.owner,
+            purpose=Property.Purpose.SALE,
+            price="85000000.00",
+            title="Moradia para venda",
+        )
+        self.client_user = make_user(email="cliente@exemplo.ao")
+
+    def test_counter_links_parent_and_moves_state(self) -> None:
+        """A contraproposta referencia a original e a original passa a `COUNTERED`."""
+        offer = submit_offer(
+            prop=self.sale, user=self.client_user, amount=Decimal("82000000.00")
+        )
+
+        contra = counter_offer(
+            offer=offer,
+            amount=Decimal("80000000.00"),
+            actor=self.agent,
+            message="Último preço.",
+        )
+
+        self.assertEqual(contra.parent, offer)
+        self.assertTrue(contra.is_counter())
+        self.assertFalse(offer.is_counter())
+        self.assertEqual(contra.submitted_by, self.agent)
+        offer.refresh_from_db()
+        self.assertEqual(offer.status, Offer.Status.COUNTERED)
+        self.assertEqual(offer.responded_by, self.agent)
+
+    def test_counter_of_counter_is_refused(self) -> None:
+        """Cadeias de contraproposta não existem: responde-se à original."""
+        offer = submit_offer(
+            prop=self.sale, user=self.client_user, amount=Decimal("82000000.00")
+        )
+        contra = counter_offer(
+            offer=offer, amount=Decimal("80000000.00"), actor=self.agent
+        )
+
+        with self.assertRaises(ValidationError):
+            counter_offer(
+                offer=contra, amount=Decimal("79000000.00"), actor=self.agent
+            )
+
+    def test_counter_of_closed_offer_is_refused(self) -> None:
+        """Proposta encerrada não é contraposta."""
+        offer = submit_offer(
+            prop=self.sale, user=self.client_user, amount=Decimal("82000000.00")
+        )
+        answer_offer(offer=offer, target=Offer.Status.REJECTED, actor=self.agent)
+
+        with self.assertRaises(ValidationError):
+            counter_offer(
+                offer=offer, amount=Decimal("80000000.00"), actor=self.agent
+            )
+
+    def test_counter_with_zero_amount_is_refused(self) -> None:
+        """A contraproposta valida o valor como a proposta: zero não entra."""
+        offer = submit_offer(
+            prop=self.sale, user=self.client_user, amount=Decimal("82000000.00")
+        )
+
+        with self.assertRaises(ValidationError):
+            counter_offer(offer=offer, amount=Decimal(0), actor=self.agent)
+
+        self.assertEqual(Offer.objects.count(), 1)
+        offer.refresh_from_db()
+        self.assertEqual(offer.status, Offer.Status.SUBMITTED)
+
+
+class AdvanceLeadTests(TestCase):
+    """O contacto anda na máquina e fica com responsável (§2.9)."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.agent = make_user(role=User.Role.AGENT, email="agente@exemplo.ao")
+        self.other = make_user(role=User.Role.AGENT, email="outro@exemplo.ao")
+
+    def _lead(self) -> Lead:
+        return Lead.objects.create(
+            full_name="Maria dos Santos",
+            phone="+244 923 456 789",
+            lead_type=Lead.Type.CLIENT_ENQUIRY,
+        )
+
+    def test_advance_assigns_actor_when_unassigned(self) -> None:
+        """Quem trata fica dono do contacto, se ainda não houver dono."""
+        lead = self._lead()
+
+        advance_lead(lead=lead, target=Lead.Status.CONTACTED, actor=self.agent)
+
+        lead.refresh_from_db()
+        self.assertEqual(lead.status, Lead.Status.CONTACTED)
+        self.assertEqual(lead.assigned_to, self.agent)
+
+    def test_advance_keeps_existing_assignee(self) -> None:
+        """Dono posto não é trocado a cada passagem."""
+        lead = self._lead()
+        advance_lead(lead=lead, target=Lead.Status.CONTACTED, actor=self.agent)
+
+        advance_lead(lead=lead, target=Lead.Status.QUALIFIED, actor=self.other)
+
+        lead.refresh_from_db()
+        self.assertEqual(lead.assigned_to, self.agent)
+
+    def test_invalid_transition_raises(self) -> None:
+        """Um `NEW` não é convertido sem passar pelo contacto e pela qualificação."""
+        lead = self._lead()
+
+        with self.assertRaises(ValidationError):
+            advance_lead(lead=lead, target=Lead.Status.CONVERTED, actor=self.agent)
+
+
+class SchedulingTests(TestCase):
+    """O trabalho de fundo avisa uma vez e marca o que viu."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.agent = make_user(role=User.Role.AGENT, email="agente@exemplo.ao")
+        self.curator = make_user(role=User.Role.CURATOR, email="curador@exemplo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(
+            curator=self.curator, owner=self.owner, title="T3 para arrendar"
+        )
+        self.client_user = make_user(email="cliente@exemplo.ao")
+
+    def _confirmed_in(self, hours: int) -> VisitRequest:
+        visit = request_visit(
+            prop=self.prop,
+            user=self.client_user,
+            scheduled_for=timezone.now() + timedelta(hours=hours),
+        )
+        return decide_visit(
+            visit=visit, target=VisitRequest.Status.CONFIRMED, actor=self.agent
+        )
+
+    def _reminders(self) -> list:
+        conversation = get_or_create_conversation(
+            user=self.client_user, property_interest=self.prop
+        )
+        return [
+            message.body
+            for message in conversation.messages.filter(is_internal=False)
+            if "Lembrete" in message.body
+        ]
+
+    def test_reminder_runs_once(self) -> None:
+        """Correr duas vezes avisa uma: a segunda devolve zero."""
+        self._confirmed_in(hours=10)
+
+        first = due_for_scheduling()
+        second = due_for_scheduling()
+
+        self.assertEqual(first, {"lembretes": 1, "reconfirmacoes": 0})
+        self.assertEqual(second, {"lembretes": 0, "reconfirmacoes": 0})
+        self.assertEqual(len(self._reminders()), 1)
+
+    def test_outside_window_is_ignored(self) -> None:
+        """Visita a 30 horas não entra na janela de 24."""
+        self._confirmed_in(hours=30)
+
+        self.assertEqual(
+            due_for_scheduling(), {"lembretes": 0, "reconfirmacoes": 0}
+        )
+        self.assertEqual(self._reminders(), [])
+
+    def test_unhandled_pending_is_flagged(self) -> None:
+        """Pedido por tratar com data em cima aparece à reconfirmação."""
+        VisitRequest.objects.create(
+            property=self.prop,
+            requested_by=self.client_user,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+        )
+
+        result = due_for_scheduling()
+
+        self.assertEqual(result["reconfirmacoes"], 1)
+        visit = VisitRequest.objects.get()
+        self.assertIsNotNone(visit.reconfirmation_flagged_at)
+
+    def test_handled_pending_is_not_flagged(self) -> None:
+        """O que a equipa já tratou não volta à fila por causa do carimbo."""
+        VisitRequest.objects.create(
+            property=self.prop,
+            requested_by=self.client_user,
+            scheduled_for=timezone.now() - timedelta(hours=1),
+            handled_by=self.agent,
+            handled_at=timezone.now() - timedelta(hours=2),
+        )
+
+        self.assertEqual(
+            due_for_scheduling(), {"lembretes": 0, "reconfirmacoes": 0}
+        )
