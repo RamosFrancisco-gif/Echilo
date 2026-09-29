@@ -77,6 +77,29 @@ def arvore(user: object) -> list[MenuLink | MenuGroup]:
             )
         )
 
+    if getattr(user, "can_validate", False):
+        # O atendimento é de quem decide sobre pedidos de clientes — visitas,
+        # propostas, conversas e contactos. Entra por `can_validate` (AGENT,
+        # ADMIN) e não por "está na equipa": o CURATOR escreve imóveis e não
+        # decide pedidos, e vê Curadoria mas não isto. As três últimas entradas
+        # ainda não têm vista e por isso não aparecem — um destino que não
+        # existe é uma entrada que não se desenha, em vez de um 500 no
+        # cabeçalho. Os nomes `conversation_queue`, `visit_queue` e
+        # `offer_list` são o contrato com a Etapa 2: é com estes nomes que as
+        # vistas têm de nascer, e há teste a travá-lo.
+        entradas.append(
+            MenuGroup(
+                "Atendimento",
+                links=[
+                    MenuLink("Conversas", "concierge:conversation_queue", match="conversation_queue"),
+                    MenuLink("Contactos", "concierge:lead_queue", match="lead_queue"),
+                    MenuLink("Visitas", "concierge:visit_queue", match="visit_queue"),
+                    MenuLink("Propostas", "concierge:offer_list", match="offer_list"),
+                ],
+                match_prefix="",
+            )
+        )
+
     if getattr(user, "can_manage_users", False):
         entradas.append(
             MenuGroup(

@@ -711,8 +711,8 @@ conversas sem as mensagens internas visíveis ao cliente.
 conjuntos de acções, e a Fase 4 é o que as dá. Aqui é navegação, resposta e
 prazo.
 
-Existe hoje uma fila de `Lead` (`views.py:126`) que é só de leitura e **não está
-no menu** — é alcançável por URL. As conversas escaladas só se veem pelo
+Existe hoje uma fila de `Lead` (`views.py:126`) que é só de leitura e aparece no
+menu em Atendimento → Contactos. As conversas escaladas só se veem pelo
 `/admin`.
 
 **Critério de aceitação**: uma conversa escalada aparece na inbox com o motivo

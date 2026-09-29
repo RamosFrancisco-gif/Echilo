@@ -432,6 +432,7 @@ class NavigationByProfileTests(TestCase):
 
         self.assertIn("Arrendar", rotulos)
         self.assertNotIn("Curadoria", rotulos)
+        self.assertNotIn("Atendimento", rotulos)
         self.assertNotIn("Equipa e clientes", rotulos)
 
     def test_o_cliente_registado_nao_ve_nada_de_interior(self) -> None:
@@ -439,13 +440,16 @@ class NavigationByProfileTests(TestCase):
         rotulos = [entrada["label"] for entrada in self._menu(self.cliente)]
 
         self.assertNotIn("Curadoria", rotulos)
+        self.assertNotIn("Atendimento", rotulos)
         self.assertNotIn("Equipa e clientes", rotulos)
 
     def test_o_curador_ve_a_curadoria_com_imoveis_e_formulario(self) -> None:
         """O ramo de curadoria tem as duas entradas que o perfil permite."""
-        ramos = {e["label"]: e for e in self._menu(self.curator) if e.get("is_group")}
+        menu = self._menu(self.curator)
+        ramos = {e["label"]: e for e in menu if e.get("is_group")}
 
         self.assertIn("Curadoria", ramos)
+        self.assertNotIn("Atendimento", ramos)
         self.assertEqual(
             [folha["label"] for folha in ramos["Curadoria"]["links"]],
             ["Imóveis", "Novo imóvel"],
@@ -453,16 +457,43 @@ class NavigationByProfileTests(TestCase):
 
     def test_o_agente_ve_a_curadoria_mas_nao_as_contas(self) -> None:
         """Validar documentos não dá o direito de criar contas."""
-        ramos = {e["label"] for e in self._menu(self.agent) if e.get("is_group")}
+        menu = self._menu(self.agent)
+        ramos = {e["label"]: e for e in menu if e.get("is_group")}
 
         self.assertIn("Curadoria", ramos)
         self.assertNotIn("Equipa e clientes", ramos)
+        self.assertEqual(
+            [folha["label"] for folha in ramos["Atendimento"]["links"]],
+            ["Contactos"],
+        )
+
+    def test_o_ramo_do_atendimento_e_o_contrato_com_a_etapa_2(self) -> None:
+        """A árvore declara as quatro entradas mesmo sem as vistas existirem.
+
+        `para_template` esconde o que não resolve — hoje só Contactos aparece.
+        Mas os três nomes em falta têm de estar aqui escritos, porque é com
+        estes nomes que as vistas da Etapa 2 têm de nascer. Sem este teste, um
+        `visit_queue` escrito de outra forma na Etapa 2 nascia órfão do menu e
+        ninguém dava por isso: a entrada continuava escondida e parecia
+        "ainda por fazer".
+        """
+        ramos = {e.label: e for e in navigation.arvore(self.agent) if isinstance(e, navigation.MenuGroup)}
+
+        self.assertEqual(
+            [(folha.label, folha.url_name) for folha in ramos["Atendimento"].links],
+            [
+                ("Conversas", "concierge:conversation_queue"),
+                ("Contactos", "concierge:lead_queue"),
+                ("Visitas", "concierge:visit_queue"),
+                ("Propostas", "concierge:offer_list"),
+            ],
+        )
 
     def test_o_administrador_ve_a_curadoria_e_as_contas(self) -> None:
-        """`ADMIN` é o único perfil com os dois ramos."""
+        """`ADMIN` é o único perfil com os três ramos."""
         ramos = {e["label"] for e in self._menu(self.admin) if e.get("is_group")}
 
-        self.assertEqual(ramos, {"Curadoria", "Equipa e clientes"})
+        self.assertEqual(ramos, {"Curadoria", "Atendimento", "Equipa e clientes"})
 
     def test_a_folha_marcada_diz_onde_esta_a_pessoa(self) -> None:
         """Só uma entrada por página pode dizer "está aqui"."""
@@ -506,6 +537,21 @@ class NavigationByProfileTests(TestCase):
 
         self.assertNotIn(reverse("properties:curator_dashboard"), html)
         self.assertNotIn("Equipa e clientes", html)
+
+    def test_o_agente_ve_o_atendimento_no_html_e_o_curador_nao(self) -> None:
+        """O ramo desenhado segue o perfil: o agente trata pedidos, o curador não."""
+        self.client.force_login(self.agent)
+        html_agente = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertIn("Atendimento", html_agente)
+        self.assertIn(reverse("concierge:lead_queue"), html_agente)
+
+        self.client.force_login(self.curator)
+        html_curador = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertNotIn("Atendimento</summary>", html_curador)
+        self.assertNotIn('nav__menu-group-label">Atendimento', html_curador)
+        self.assertNotIn(reverse("concierge:lead_queue"), html_curador)
 
     def test_a_curadoria_abre_para_a_equipa_e_e_403_para_o_cliente(self) -> None:
         """O menu e a vista dizem a mesma coisa: a página também recusa."""
