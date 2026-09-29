@@ -17,7 +17,9 @@
       <a href="{% url 'properties:property_list' %}?type=LAND">Terrenos</a>
       <a href="{% url 'properties:home' %}#como-funciona">Como funciona</a>
       <a href="{% url 'assistant:chat' %}">Assistente</a>
-      <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% if not current_user.is_team_role %}
+        <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% endif %}
     </nav>
 
     <p class="footer__legal">

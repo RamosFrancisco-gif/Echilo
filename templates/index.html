@@ -50,7 +50,9 @@
         {% else %}
           <a class="btn btn--primary" href="{% url 'accounts:register' %}">Criar conta gratuita</a>
         {% endif %}
-        <a class="btn" href="{% url 'concierge:owner_intake' %}">Quero anunciar o meu imóvel</a>
+        {% if not current_user.is_team_role %}
+          <a class="btn" href="{% url 'concierge:owner_intake' %}">Quero anunciar o meu imóvel</a>
+        {% endif %}
       </div>
     </div>
 
@@ -302,6 +304,12 @@
   </div>
 </section>
 
+{% comment %}
+  A faixa é conversão para donos ("Tem um imóvel?"). Para a equipa, que é
+  quem faz a curadoria, o bloco inteiro é ruído — e sem o botão principal
+  ficava coxo. Esconde-se por inteiro em vez de se remendar.
+{% endcomment %}
+{% if not current_user.is_team_role %}
 <section class="section section--tight">
   <div class="wrap">
     <div class="sidebar-card hero--band">
@@ -319,4 +327,5 @@
     </div>
   </div>
 </section>
+{% endif %}
 {% endblock %}

@@ -25,6 +25,18 @@ def require_team_member(request: HttpRequest) -> None:
         raise PermissionDenied("Esta área é reservada à equipa Echilo.")
 
 
+def refuse_team_member(request: HttpRequest) -> None:
+    """Recusa actos de cliente a quem é da equipa.
+
+    Pedir visita e fazer proposta são o cliente a pedir; a equipa confirma e
+    decide (§2.10, §2.5). Um pedido com `requested_by` de agente é lixo na fila
+    — e escondê-lo no template sem o recusar na vista deixava-o à distância de
+    um endereço escrito à mão.
+    """
+    if is_team_member(request.user):
+        raise PermissionDenied("Pedir visitas e fazer propostas é acto de cliente.")
+
+
 def require_admin(request: HttpRequest) -> None:
     """Restringe a gestão de contas ao administrador (§3).
 

@@ -111,23 +111,31 @@
             Referência {{ property.reference }} · publicado em {{ property.published_at|date:"d/m/Y" }}
           </p>
 
-          {% if property.purpose == 'RENT' %}
-            <p class="text-muted t-meta">
-              Para visitar, a equipa confirma a data e a hora. A morada exacta só é prestada
-              depois de a visita estar agendada.
-            </p>
-            <a class="btn btn--primary btn--block btn--lg" href="{% url 'concierge:visit_request' property.reference %}">
-              <svg class="i" aria-hidden="true"><use href="#calendar"/></svg>
-              Pedir visita
-            </a>
-          {% else %}
-            <p class="text-muted t-meta">
-              Preços são negociados com um agente do Echilo. Envia a tua proposta e a equipa
-              responde com uma contraproposta.
-            </p>
-            <a class="btn btn--primary btn--block btn--lg" href="{% url 'concierge:offer_create' property.reference %}">
-              <svg class="i" aria-hidden="true"><use href="#document"/></svg>
-              Enviar proposta
+          {% if not current_user.is_team_role %}
+            {% if property.purpose == 'RENT' %}
+              <p class="text-muted t-meta">
+                Para visitar, a equipa confirma a data e a hora. A morada exacta só é prestada
+                depois de a visita estar agendada.
+              </p>
+              <a class="btn btn--primary btn--block btn--lg" href="{% url 'concierge:visit_request' property.reference %}">
+                <svg class="i" aria-hidden="true"><use href="#calendar"/></svg>
+                Pedir visita
+              </a>
+            {% else %}
+              <p class="text-muted t-meta">
+                Preços são negociados com um agente do Echilo. Envia a tua proposta e a equipa
+                responde com uma contraproposta.
+              </p>
+              <a class="btn btn--primary btn--block btn--lg" href="{% url 'concierge:offer_create' property.reference %}">
+                <svg class="i" aria-hidden="true"><use href="#document"/></svg>
+                Enviar proposta
+              </a>
+            {% endif %}
+          {% endif %}
+          {% if current_user.can_curate %}
+            <a class="btn btn--block mt-10" href="{% url 'properties:curator_detail' property.reference %}">
+              <svg class="i" aria-hidden="true"><use href="#building"/></svg>
+              Abrir na curadoria
             </a>
           {% endif %}
 

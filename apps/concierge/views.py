@@ -10,7 +10,7 @@ from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from apps.core.pagination import pagina_de
-from apps.core.permissions import require_team_member
+from apps.core.permissions import refuse_team_member, require_team_member
 from apps.properties.models import Property
 from apps.properties.selectors import PropertyQueryService
 
@@ -53,6 +53,7 @@ def owner_intake(request: HttpRequest) -> HttpResponse:
 @login_required
 def visit_request(request: HttpRequest, reference: str) -> HttpResponse:
     """Regista o pedido de visita de um imóvel publicado."""
+    refuse_team_member(request)
     prop = get_object_or_404(PropertyQueryService.base_queryset(), reference=reference)
     form = VisitRequestForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
@@ -89,6 +90,7 @@ def visit_request(request: HttpRequest, reference: str) -> HttpResponse:
 @login_required
 def offer_create(request: HttpRequest, reference: str) -> HttpResponse:
     """Recebe uma proposta formal sobre um imóvel à venda."""
+    refuse_team_member(request)
     prop = get_object_or_404(PropertyQueryService.base_queryset(), reference=reference)
     if prop.purpose != Property.Purpose.SALE:
         messages.error(request, _("Este imóvel não está disponível para proposta."))

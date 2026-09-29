@@ -571,6 +571,19 @@ class NavigationByProfileTests(TestCase):
         self.assertNotIn('nav__menu-group-label">Atendimento', html_curador)
         self.assertNotIn(reverse("concierge:lead_queue"), html_curador)
 
+    def test_o_anunciar_e_de_quem_chega_de_fora(self) -> None:
+        """A captação é pública: a equipa tem a curadoria e não o formulário."""
+        self.client.force_login(self.agent)
+        html_agente = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertNotIn("Anunciar imóvel", html_agente)
+        self.assertNotIn("Quero anunciar o meu imóvel", html_agente)
+
+        self.client.force_login(self.cliente)
+        html_cliente = self.client.get(reverse("properties:home")).content.decode()
+
+        self.assertIn("Anunciar imóvel", html_cliente)
+
     def test_a_curadoria_abre_para_a_equipa_e_e_403_para_o_cliente(self) -> None:
         """O menu e a vista dizem a mesma coisa: a página também recusa."""
         url = reverse("properties:curator_dashboard")

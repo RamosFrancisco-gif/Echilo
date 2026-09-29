@@ -47,7 +47,14 @@
         <a class="btn btn--sm" href="{% url 'accounts:login' %}">Entrar</a>
         <a class="btn btn--primary btn--sm" href="{% url 'accounts:register' %}">Criar conta</a>
       {% endif %}
-      <a class="btn btn--sm" href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% if not current_user.is_team_role %}
+        <a class="btn btn--sm" href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% endif %}
+      {% comment %}
+        A adesão é pública por definição (§2.1): quem ainda não tem conta e quem
+        é cliente podem precisar dela. A equipa tem `/curadoria/novo/` e não
+        precisa do formulário de captação no cabeçalho.
+      {% endcomment %}
     </div>
 
     <button type="button" class="nav__burger" id="nav-burger" aria-label="Abrir menu" aria-expanded="false" aria-controls="nav-menu">
@@ -78,7 +85,9 @@
           <a href="{{ item.url }}"{% if item.is_current %} aria-current="page"{% endif %}>{{ item.label }}</a>
         {% endif %}
       {% endfor %}
-      <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% if not current_user.is_team_role %}
+        <a href="{% url 'concierge:owner_intake' %}">Anunciar imóvel</a>
+      {% endif %}
       {% if current_user.is_authenticated %}
         {% comment %}
           O avatar do cabeçalho desaparece atrás do botão do telemóvel, e sem

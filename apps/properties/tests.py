@@ -4034,3 +4034,48 @@ class ReducaoDoLoteTests(TestCase):
         dizer = bloco[bloco.index("dizer: function") : bloco.index("terminar: function")]
         self.assertNotIn("setAttribute('role'", dizer)
         self.assertIn("setAttribute('role'", bloco)
+
+
+class PropertyDetailCallsToActionTests(TestCase):
+    """A ficha pede ao cliente e orienta a equipa — nunca o contrário.
+
+    "Pedir visita" e "Enviar proposta" são o cliente a pedir; a equipa confirma
+    e decide. Um agente com um botão de "Pedir visita" à frente pede visitas a
+    si mesmo, e o pedido com `requested_by` de agente é lixo na fila. A equipa
+    vê em vez disso o atalho para a ficha interna, que é onde ela trabalha.
+    """
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.curator = make_user(role="CURATOR", email="curador@echilo.ao")
+        self.owner = make_owner(created_by=self.curator)
+        self.prop = make_property(curator=self.curator, owner=self.owner)
+        self.url = reverse("properties:property_detail", args=[self.prop.reference])
+        self.cliente = make_user(email="cliente@echilo.ao")
+        self.agente = make_user(role="AGENT", email="agente@echilo.ao")
+
+    def test_o_cliente_ve_o_pedido_e_nao_a_curadoria(self) -> None:
+        """Quem pede é o cliente; a ficha interna não é para ele."""
+        self.client.force_login(self.cliente)
+
+        html = self.client.get(self.url).content.decode()
+
+        self.assertIn("Pedir visita", html)
+        self.assertNotIn("Abrir na curadoria", html)
+
+    def test_o_agente_ve_a_curadoria_e_nao_o_pedido(self) -> None:
+        """Quem decide não pede: o botão do cliente some e entra o atalho."""
+        self.client.force_login(self.agente)
+
+        html = self.client.get(self.url).content.decode()
+
+        self.assertNotIn("Pedir visita", html)
+        self.assertIn("Abrir na curadoria", html)
+        self.assertIn(reverse("properties:curator_detail", args=[self.prop.reference]), html)
+
+    def test_o_visitante_ve_o_pedido(self) -> None:
+        """Sem conta, o funil continua: o pedido leva ao login."""
+        html = self.client.get(self.url).content.decode()
+
+        self.assertIn("Pedir visita", html)
+        self.assertNotIn("Abrir na curadoria", html)

@@ -165,6 +165,19 @@ class VisitRequestTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_equipa_nao_pede_visita(self) -> None:
+        """Pedir visita é acto de cliente: a equipa confirma, não pede (§2.10)."""
+        self.client.force_login(self.curator)
+
+        pagina = self.client.get(self.url)
+        pedido = self.client.post(
+            self.url, {"visit_date": _future_day(), "visit_time": "10:00"}
+        )
+
+        self.assertEqual(pagina.status_code, 403)
+        self.assertEqual(pedido.status_code, 403)
+        self.assertFalse(VisitRequest.objects.exists())
+
 
 class OfferTests(TestCase):
     """§2.5: a proposta é sempre registada em Kwanza e tratada por um humano."""
@@ -218,6 +231,17 @@ class OfferTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFormError(response, "form", "amount", "O valor proposto tem de ser maior do que zero.")
+
+    def test_equipa_nao_faz_proposta(self) -> None:
+        """Fazer proposta é acto de cliente: a equipa decide, não propõe (§2.5)."""
+        self.client.force_login(self.curator)
+
+        pagina = self.client.get(self.url)
+        pedido = self.client.post(self.url, {"amount": "82.000.000"})
+
+        self.assertEqual(pagina.status_code, 403)
+        self.assertEqual(pedido.status_code, 403)
+        self.assertFalse(Offer.objects.exists())
         self.assertFalse(Offer.objects.exists())
 
 
