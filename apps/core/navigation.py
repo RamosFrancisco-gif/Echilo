@@ -46,11 +46,20 @@ class MenuGroup:
 # A navegação pública. É igual para toda a gente, e é igual para quem está
 # dentro: um cliente e um administrador procuram o mesmo imóvel pelas mesmas
 # três portas. O que muda é o que vem a seguir.
-PUBLICO: tuple[MenuLink, ...] = (
+PUBLICO: tuple[MenuLink | MenuGroup, ...] = (
     MenuLink("Início", "properties:home", match="home"),
-    MenuLink("Arrendar", "properties:property_list", match="property_list", query="?purpose=RENT"),
-    MenuLink("Comprar", "properties:property_list", match="property_list", query="?purpose=SALE"),
-    MenuLink("Terrenos", "properties:property_list", match="property_list", query="?type=LAND"),
+    # As três portas do catálogo são o mesmo destino com outra pergunta — por
+    # isso vivem num ramo só, em vez de três entradas de topo. Três itens soltos
+    # liam-se como três secções; é uma pergunta com três respostas.
+    MenuGroup(
+        "Imóveis",
+        links=[
+            MenuLink("Arrendar", "properties:property_list", match="property_list", query="?purpose=RENT"),
+            MenuLink("Comprar", "properties:property_list", match="property_list", query="?purpose=SALE"),
+            MenuLink("Terrenos", "properties:property_list", match="property_list", query="?type=LAND"),
+        ],
+        match_prefix="property_",
+    ),
     # A âncora fica na home, e por isso o `match` é vazio: duas entradas com
     # `aria-current` na mesma página lê-se como dois "está aqui".
     MenuLink("Como funciona", "properties:home", query="#como-funciona"),

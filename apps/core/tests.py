@@ -428,9 +428,15 @@ class NavigationByProfileTests(TestCase):
 
     def test_o_visitante_so_ve_a_navegacao_publica(self) -> None:
         """Sem conta não há Curadoria nem contas, e a lista pública está inteira."""
-        rotulos = [entrada["label"] for entrada in self._menu(None)]
+        menu = self._menu(None)
+        rotulos = [entrada["label"] for entrada in menu]
+        ramo = next(e for e in menu if e.get("is_group") and e["label"] == "Imóveis")
 
-        self.assertIn("Arrendar", rotulos)
+        self.assertIn("Imóveis", rotulos)
+        self.assertEqual(
+            [folha["label"] for folha in ramo["links"]],
+            ["Arrendar", "Comprar", "Terrenos"],
+        )
         self.assertNotIn("Curadoria", rotulos)
         self.assertNotIn("Atendimento", rotulos)
         self.assertNotIn("Equipa e clientes", rotulos)
@@ -490,10 +496,10 @@ class NavigationByProfileTests(TestCase):
         )
 
     def test_o_administrador_ve_a_curadoria_e_as_contas(self) -> None:
-        """`ADMIN` é o único perfil com os três ramos."""
+        """`ADMIN` é o único perfil com os quatro ramos."""
         ramos = {e["label"] for e in self._menu(self.admin) if e.get("is_group")}
 
-        self.assertEqual(ramos, {"Curadoria", "Atendimento", "Equipa e clientes"})
+        self.assertEqual(ramos, {"Imóveis", "Curadoria", "Atendimento", "Equipa e clientes"})
 
     def test_a_folha_marcada_diz_onde_esta_a_pessoa(self) -> None:
         """Só uma entrada por página pode dizer "está aqui"."""
